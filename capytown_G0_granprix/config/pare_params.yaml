@@ -39,4 +39,6 @@ pare_detector:
 
     factor_area_sin_atencion: 2.5
     frames_confirmacion: 3
+    # Tiempo minimo entre pitidos (evita repetirlo por parpadeo de la camara).
+    beep_cooldown_s: 5.0
     publish_debug: true

@@ -29,7 +29,7 @@ Tópicos:
     pub  /pare_detectado       (std_msgs/Bool)   — ROJO (PARE) confirmado, centrado
     pub  /verde_detectado      (std_msgs/Bool)   — VERDE opaco confirmado, centrado
     pub  /amarillo_detectado   (std_msgs/Bool)   — AMARILLO confirmado
-    pub  /beep                 (std_msgs/UInt16) — secuencia "pi pi piiiiiii" al ver rojo/amarillo
+    pub  /beep                 (std_msgs/UInt16) — un pitido ("pi") al ver rojo/amarillo
     pub  /pare/area            (std_msgs/Float32) — área del blob rojo (debug/tuning)
     pub  /pare/debug_image     (sensor_msgs/Image) — overlay rojo+verde para captura
 """
@@ -94,6 +94,11 @@ class PareDetector(Node):
             # Fusión por contexto (zona de atención del maze_solver)
             ('factor_area_sin_atencion', 2.5),
             ('frames_confirmacion', 3),  # frames seguidos para rechazar destellos
+            # Tiempo minimo entre pitidos: un solo frame que pierda el color
+            # (ruido/reflejo) resetea el contador de confirmacion y, al
+            # re-confirmarse en seguida, generaba un flanco nuevo (pitido
+            # repetido) sin que el carrito se moviera del cartel.
+            ('beep_cooldown_s',  5.0),
             ('publish_debug',    True),
             ('topic_camera',      '/image_raw'),
         ])
@@ -129,6 +134,7 @@ class PareDetector(Node):
         self.centro_tol_frac = float(gp('centro_tol_frac'))
         self.factor_sin_atencion = float(gp('factor_area_sin_atencion'))
         self.frames_confirmacion = int(gp('frames_confirmacion'))
+        self.beep_cooldown_s = float(gp('beep_cooldown_s'))
         self.publish_debug = bool(gp('publish_debug'))
         self.topic_camera = str(gp('topic_camera'))
 
@@ -138,8 +144,7 @@ class PareDetector(Node):
         self.frames_seguidos_amarillo = 0
         self._rojo_anterior = False
         self._amarillo_anterior = False
-        self._beep_timer = None
-        self._beep_paso = 0
+        self._ultimo_beep = None
 
         self.create_subscription(Image, self.topic_camera, self.on_image, 10)
         self.create_subscription(Bool, '/maze/atencion_pare', self.on_atencion, 10)
@@ -219,11 +224,19 @@ class PareDetector(Node):
         self.pub_area.publish(Float32(
             data=float(mejor_r['area']) if mejor_r else 0.0))
 
-        # Secuencia "pi pi piiiiiii" (ver _disparar_beep_paso). Se dispara
-        # una sola vez al comenzar cada detección, no por frame.
-        if ((conf_r and not self._rojo_anterior) or
+        # Un pitido ("pi") por deteccion, con cooldown: si el flanco se
+        # repite antes de beep_cooldown_s (recuperacion tras perder el
+        # color un solo frame) se ignora, para no repetir el pitido sin
+        # que el carrito se haya alejado del cartel.
+        ahora = self.get_clock().now()
+        en_cooldown = (self._ultimo_beep is not None and
+                       (ahora - self._ultimo_beep).nanoseconds / 1e9
+                       < self.beep_cooldown_s)
+        if not en_cooldown and (
+                (conf_r and not self._rojo_anterior) or
                 (conf_a and not self._amarillo_anterior)):
             self._iniciar_beep()
+            self._ultimo_beep = ahora
         self._rojo_anterior = conf_r
         self._amarillo_anterior = conf_a
 
@@ -259,28 +272,12 @@ class PareDetector(Node):
         hi = np.array([self.amarillo_h_max, 255, 255], dtype=np.uint8)
         return self._limpiar(cv2.inRange(hsv, lo, hi))
 
-    # "pi pi piiiiiii": dos pitidos cortos + uno largo. Cada valor es la
-    # duracion (ms) de un one-shot del buzzer (se apaga solo); la pausa
-    # entre pasos es mayor que el pitido corto para que quede un silencio
-    # audible entre "pi" y "pi" antes del pitido largo final.
-    _BEEP_DURACIONES_MS = (120, 120, 900)
-    _BEEP_PAUSA_S = 0.27
+    # Un solo pitido corto ("pi"). El valor es la duracion (ms) de un
+    # one-shot del buzzer: se apaga solo, no requiere un comando de STOP.
+    _BEEP_DURACION_MS = 150
 
     def _iniciar_beep(self):
-        """Dispara la secuencia sin bloquear el procesamiento de cámara."""
-        self._beep_paso = 0
-        self._disparar_beep_paso()
-
-    def _disparar_beep_paso(self):
-        self.pub_beep.publish(UInt16(data=self._BEEP_DURACIONES_MS[self._beep_paso]))
-        if self._beep_timer is not None:
-            self._beep_timer.cancel()
-            self.destroy_timer(self._beep_timer)
-            self._beep_timer = None
-        self._beep_paso += 1
-        if self._beep_paso < len(self._BEEP_DURACIONES_MS):
-            self._beep_timer = self.create_timer(
-                self._BEEP_PAUSA_S, self._disparar_beep_paso)
+        self.pub_beep.publish(UInt16(data=self._BEEP_DURACION_MS))
 
     @staticmethod
     def _quitar_componentes_pequenos(mask, area_min):
