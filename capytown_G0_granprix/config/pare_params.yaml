@@ -1,0 +1,42 @@
+# Parametros del detector de senal PARE por camara.
+pare_detector:
+  ros__parameters:
+    topic_camera: /image_raw
+
+    rojo_h_bajo_max: 10
+    rojo_h_alto_min: 170
+    rojo_s_min: 100
+    rojo_v_min: 70
+
+    # Amarillo confirmado también dispara la secuencia 300/900 en /beep.
+    amarillo_h_min: 20
+    amarillo_h_max: 35
+    amarillo_s_min: 100
+    amarillo_v_min: 80
+    amarillo_area_min: 600
+
+    # Rango amplio: detecta cualquier verde visible en la cámara.
+    verde_h_min: 35
+    verde_h_max: 95
+    verde_s_min: 40
+    verde_s_max: 255
+    verde_v_min: 60
+    verde_v_max: 255
+    verde_area_min: 600
+    verde_aspecto_min: 0.05
+    verde_aspecto_max: 20.0
+    verde_area_max: 150000
+    verde_solidez_min: 0.35
+
+    area_min: 600
+    area_max: 60000
+    aspecto_min: 0.5
+    aspecto_max: 2.0
+    solidez_min: 0.75
+    # ROJO y amarillo: toda la cámara (1.0). VERDE (meta): 2/3 superiores.
+    franja_inferior: 1.0
+    franja_verde: 0.6667
+
+    factor_area_sin_atencion: 2.5
+    frames_confirmacion: 3
+    publish_debug: true

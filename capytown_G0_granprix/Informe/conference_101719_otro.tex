@@ -1,0 +1,201 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{amsmath}
+\usepackage{url}
+
+\begin{document}
+
+\title{Navegación Autónoma en Laberinto usando Fusión Sensorial Cámara-LiDAR para el Gran Prix CapyTown}
+
+\author{
+\IEEEauthorblockN{
+Nombre Integrante 1,
+Nombre Integrante 2,
+Nombre Integrante 3,
+Nombre Integrante 4
+}
+\IEEEauthorblockA{
+Universidad ESAN\\
+Facultad de Ingeniería\\
+Lima, Perú\\
+correo1@esan.edu.pe, correo2@esan.edu.pe
+}
+}
+
+\maketitle
+
+\begin{abstract}
+Este proyecto presenta el desarrollo de un sistema de navegación autónoma para el reto Gran Prix CapyTown, donde un robot móvil debe recorrer un laberinto desde una celda de inicio hasta una meta, evitando colisiones y respetando señales de PARE. La solución integra información geométrica del LiDAR para detectar paredes, pasillos, intersecciones y callejones sin salida, junto con información visual de una cámara para reconocer señales PARE. La navegación se organiza mediante una máquina de estados finitos que permite explorar el entorno, tomar decisiones en intersecciones, detenerse ante señales y registrar métricas de desempeño como tiempo, longitud de ruta, eficiencia y número de colisiones.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Robótica móvil, LiDAR, visión por computadora, navegación autónoma, fusión sensorial, ROS2.
+\end{IEEEkeywords}
+
+\section{Introducción}
+
+La navegación autónoma en entornos desconocidos es un problema importante dentro de la robótica móvil, debido a que el robot debe tomar decisiones en tiempo real a partir de sensores. En el reto Gran Prix CapyTown, el robot debe desplazarse por un laberinto reconfigurable, detectar intersecciones, evitar paredes y respetar señales de PARE colocadas en diferentes posiciones.
+
+El objetivo principal del proyecto es implementar un sistema autónomo que permita al robot recorrer el laberinto desde la zona de inicio hasta la meta, utilizando el LiDAR para la navegación geométrica y la cámara para la detección semántica de señales. La solución propuesta busca integrar los módulos desarrollados en los retos clasificatorios, evitando reprogramar percepción desde cero.
+
+\section{Planteamiento del Problema}
+
+El robot debe recorrer un laberinto de forma autónoma, sin intervención manual, identificando rutas válidas, callejones sin salida e intersecciones. Además, debe detenerse completamente durante aproximadamente tres segundos cuando detecte una señal de PARE. El reto se complica porque las paredes internas y las señales pueden reconfigurarse entre corridas, por lo que no es suficiente memorizar una ruta fija.
+
+Los principales desafíos del problema son:
+
+\begin{itemize}
+    \item Mantener una distancia segura respecto a las paredes.
+    \item Detectar intersecciones usando datos del LiDAR.
+    \item Reconocer señales PARE mediante visión por computadora.
+    \item Fusionar las decisiones de cámara y LiDAR.
+    \item Evitar colisiones durante giros y maniobras.
+    \item Registrar métricas de desempeño para comparar corridas.
+\end{itemize}
+
+\section{Sistema Propuesto}
+
+El sistema propuesto se basa en una arquitectura de fusión sensorial. El LiDAR proporciona información de distancias para detectar paredes, pasillos, obstáculos e intersecciones. La cámara permite identificar señales PARE mediante segmentación de color y validación por forma. Ambos sensores son integrados por el nodo principal \textit{maze\_solver}, encargado de publicar comandos de velocidad hacia el robot.
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=0.35\textwidth]{fig1.png}
+    \caption{Modelo preliminar del robot propuesto para el reto Gran Prix CapyTown.}
+    \label{fig:modelo_robot}
+\end{figure}
+
+La Fig.~\ref{fig:modelo_robot} muestra uno de los modelos considerados para representar el robot dentro de la documentación del proyecto.
+
+\subsection{Arquitectura General}
+
+La arquitectura del sistema considera los siguientes componentes:
+
+\begin{itemize}
+    \item \textbf{LiDAR:} permite detectar paredes, distancias laterales, pared frontal y aperturas.
+    \item \textbf{Cámara:} permite detectar señales PARE mediante procesamiento de imagen.
+    \item \textbf{Odometría:} permite estimar la posición, orientación y longitud recorrida.
+    \item \textbf{maze\_solver:} nodo principal que integra sensores y decide el movimiento.
+    \item \textbf{behavior\_fsm:} módulo reutilizado para controlar comportamientos del robot.
+    \item \textbf{box\_detector:} módulo reutilizado para detectar obstáculos tipo caja, si aplica.
+\end{itemize}
+
+\section{Metodología}
+
+\subsection{Navegación con LiDAR}
+
+Para la navegación geométrica se utiliza una estrategia de seguimiento de pared. El robot calcula la distancia lateral a una pared y ajusta su velocidad angular para mantenerse a una distancia objetivo. Si el LiDAR detecta una pared frontal por debajo de un umbral definido, el robot detiene el avance y decide realizar un giro.
+
+La detección de intersecciones se realiza cuando aparece una apertura lateral significativa en los datos del LiDAR. Por otro lado, un callejón sin salida se identifica cuando existen obstáculos al frente y a ambos lados.
+
+\subsection{Detección de Señales PARE}
+
+La cámara se utiliza para detectar señales PARE mediante segmentación de color rojo en el espacio HSV. Para reducir falsos positivos, no se considera suficiente detectar un objeto rojo; también se valida el área del contorno y su forma aproximada.
+
+La búsqueda de señales se prioriza cuando el LiDAR indica que el robot está cerca de una intersección. Esta zona de atención permite reducir errores causados por reflejos u objetos rojos que no corresponden a una señal PARE.
+
+\subsection{Fusión Sensorial y Arbitraje}
+
+La regla de arbitraje define qué sensor tiene prioridad en situaciones de conflicto. En este sistema, el LiDAR tiene prioridad para la navegación y prevención de colisiones, mientras que la cámara tiene prioridad cuando detecta una señal PARE.
+
+Por lo tanto, si el LiDAR indica que el camino está libre pero la cámara detecta una señal PARE válida, el robot debe detenerse completamente durante tres segundos antes de continuar.
+
+\subsection{Máquina de Estados}
+
+El comportamiento del robot se organiza mediante una máquina de estados finitos. Los estados principales considerados son:
+
+\begin{itemize}
+    \item \textbf{EXPLORAR:} el robot inicia la búsqueda de la ruta.
+    \item \textbf{EN\_PASILLO:} avanza siguiendo pared o centrado en el pasillo.
+    \item \textbf{INTERSECCION:} detecta una apertura y evalúa opciones de giro.
+    \item \textbf{PARAR\_PARE:} se detiene si la cámara detecta una señal PARE.
+    \item \textbf{ESPERAR\_3S:} mantiene la detención completa durante tres segundos.
+    \item \textbf{DECIDIR\_GIRO:} selecciona la dirección a seguir.
+    \item \textbf{GIRAR:} ejecuta el giro usando odometría.
+    \item \textbf{DEAD\_END:} realiza media vuelta al detectar un callejón sin salida.
+    \item \textbf{META:} finaliza la corrida.
+\end{itemize}
+
+\section{Configuración Experimental}
+
+El escenario del reto consiste en un laberinto de 360 cm por 240 cm, dividido en una rejilla de 6 por 4 celdas. El robot parte desde la esquina inferior izquierda y debe llegar a la esquina superior derecha. Las paredes internas y las señales PARE pueden cambiar entre corridas.
+
+El reto se desarrolla en dos rondas:
+
+\begin{itemize}
+    \item \textbf{Ronda 1 - Exploración:} el robot recorre el laberinto sin conocer el trazado.
+    \item \textbf{Ronda 2 - Time Attack:} el robot busca llegar a la meta con menor tiempo y ruta más eficiente.
+\end{itemize}
+
+\section{Métricas de Evaluación}
+
+Las métricas se registran en el archivo \textit{metricas\_granprix.csv}. La Tabla~\ref{tab:metricas} resume las principales métricas usadas para evaluar el desempeño.
+
+\begin{table}[!t]
+\caption{Métricas registradas durante las corridas}
+\label{tab:metricas}
+\centering
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Métrica} & \textbf{Descripción} \\
+\hline
+tiempo\_s & Tiempo total hasta la meta \\
+\hline
+long\_ruta\_cm & Longitud recorrida por odometría \\
+\hline
+eficiencia & Relación entre ruta óptima y ruta recorrida \\
+\hline
+colisiones & Número de contactos con paredes u obstáculos \\
+\hline
+pare\_detectados & Señales PARE detectadas por cámara \\
+\hline
+pare\_respetados & Señales donde se detuvo 3 segundos \\
+\hline
+pare\_falsos & Detenciones incorrectas sin señal real \\
+\hline
+dead\_ends\_visitados & Callejones sin salida visitados \\
+\hline
+\end{tabular}
+\end{table}
+
+La eficiencia se calcula mediante la siguiente expresión:
+
+\begin{equation}
+eficiencia = \frac{longitud\_optima}{longitud\_recorrida}
+\end{equation}
+
+Un valor cercano a 1 indica que el robot recorrió una ruta cercana a la óptima.
+
+\section{Resultados Esperados}
+
+Se espera que el robot complete ambas rondas de manera autónoma, evitando colisiones y respetando todas las señales PARE. En la primera ronda, el objetivo principal es explorar y llegar a la meta. En la segunda ronda, el objetivo es reducir el tiempo y mejorar la eficiencia de la ruta.
+
+Los resultados se analizarán comparando el tiempo total, la longitud recorrida, la cantidad de colisiones, los PARE detectados, los PARE respetados y los falsos positivos.
+
+\section{Conclusiones}
+
+El proyecto integra percepción LiDAR, visión por computadora y control basado en estados para resolver un problema de navegación autónoma en laberinto. La estrategia propuesta permite que el robot tome decisiones a partir de la geometría del entorno y de señales visuales. Además, el registro de métricas permite evaluar objetivamente el desempeño entre rondas y justificar las mejoras implementadas.
+
+Como trabajo futuro, se plantea mejorar la estimación de posición mediante odometría, ajustar los umbrales del LiDAR y optimizar la detección visual de señales PARE para reducir falsos positivos.
+
+\section*{Agradecimientos}
+
+Los autores agradecen al curso de Robótica Móvil por el desarrollo progresivo de los retos clasificatorios que permitieron integrar percepción, control y navegación autónoma en el reto final.
+
+\begin{thebibliography}{00}
+
+\bibitem{ros2}
+Open Robotics, ``ROS 2 Documentation,'' 2026.
+
+\bibitem{opencv}
+OpenCV, ``Open Source Computer Vision Library,'' 2026.
+
+\bibitem{ieee}
+M. Shell, ``How to Use the IEEEtran LaTeX Class,'' IEEE, 2015.
+
+\end{thebibliography}
+
+\end{document}

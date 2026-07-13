@@ -1,0 +1,86 @@
+# Parámetros de movimiento tomados de granprix_params.yaml del proyecto de referencia.
+# Integra lidar_processor + state_machine dentro del único maze_solver.
+maze_solver:
+  ros__parameters:
+    scan_topic: /scan
+    front_offset_deg: 180.0
+    invert_left_right: false
+    max_range_use_m: 4.0
+    front_window_deg: [-15.0, 15.0]
+    front_narrow_window_deg: [-5.0, 5.0]
+    right_front_window_deg: [-75.0, -45.0]
+    right_window_deg: [-110.0, -70.0]
+    right_rear_window_deg: [-135.0, -105.0]
+    left_window_deg: [70.0, 110.0]
+    right_side_window_deg: [-110.0, -70.0]
+    left_side_window_deg: [70.0, 110.0]
+    min_puntos_linea: 6
+    right_wall_max_range_m: 0.5
+    left_wall_max_range_m: 0.5
+    outlier_max_iter: 3
+    outlier_residuo_m: 0.03
+    lidar_zones_topic: /lidar_zones
+    odom_topic: /odom_raw
+    cmd_vel_topic: /cmd_vel
+    wall_follow_topic: /wall_follow/cmd_vel_suggestion
+    pare_topic: /pare_detectado
+    event_topic: /robot_event
+    robot_state_topic: /maze/estado
+    usar_camara: true
+    control_rate_hz: 20.0
+    modo_simplificado: true
+    logica_dos_reglas: true
+    seguir_pared_izquierda: true
+    velocidad_recta_mps: 0.15
+    distancia_objetivo_m: 0.12
+    ganancia_angulo_recta: 2.0
+    ganancia_distancia_recta: 2.0
+    angular_max_recta_radps: 0.6
+    frente_confirmaciones_ciclos: 3
+    distancia_chequeo_pared_m: 0.12
+    tiempo_chequeo_pared_s: 0.5
+    chequeo_pared_confirmaciones_ciclos: 5
+    avance_giro_vacio_m: 0.12
+    giro_vacio_max_repeticiones: 4
+    angulo_maximo_giro_deg: 150.0
+    umbral_frente_pared_m: 0.3
+    umbral_frente_libre_m: 0.35
+    umbral_lado_libre_m: 0.3
+    umbral_colision_m: 0.15
+    umbral_lateral_min_m: 0.07
+    correccion_giro_360: true
+    correccion_giro_grados: 10.0
+    tiempo_espera_obstaculo_s: 2.0
+    distancia_celda_m: 5.0
+    margen_avance_m: 0.05
+    muestras_confirmacion: 5
+    consenso_minimo: 4
+    velocidad_giro_lineal_mps: 0.06
+    velocidad_giro_angular_radps: 0.6
+    tolerancia_giro_deg: 4.0
+    angulo_giro_deg: 90.0
+    tiempo_pausa_antes_girar_s: 1.0
+    tolerancia_alineacion_m: 0.02
+    tiempo_max_alinear_s: 4.0
+    velocidad_alineacion_lineal_mps: 0.06
+    velocidad_alineacion_angular_radps: 0.3
+    # FRENO_PARE solo detiene; luego continúa el mismo estado interno.
+    tiempo_pare_s: 5.0
+    tiempo_espera_camara_s: 0.5
+    celda_inicio: A4
+    celda_meta: F1
+    heading_inicial: NORTE
+    max_celdas_recorridas: 60
+    factor_dist_odom: 0.9474
+    factor_ang_odom: 0.9899
+    # --- FASE 2 (ruta corta / speed-run). Aditivo: con ruta_activa=false el
+    # comportamiento es idéntico al mapeo puro. ---
+    ruta_activa: true
+    verde_topic: /verde_detectado
+    ruta_topic: /maze/ruta_corta
+    calcular_ruta_topic: /maze/calcular_ruta
+    iniciar_ruta_topic: /maze/iniciar_ruta
+    tamano_celda_m: 0.30
+    ruta_celda_inicio: A7
+    ruta_heading_inicial: NORTE
+    ruta_asume_rumbo_inicial: true

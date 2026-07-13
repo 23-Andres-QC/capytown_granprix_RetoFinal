@@ -1,0 +1,9 @@
+# Artefactos de Python
+__pycache__/
+*.pyc
+
+# Salida del simulador
+metricas_granprix.csv
+
+# Copia local usada solo como referencia durante el port del movimiento.
+Reto-Final-ROBOTICA-Yahboom-ROSMASTER--main/

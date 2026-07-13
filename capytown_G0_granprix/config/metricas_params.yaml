@@ -1,0 +1,8 @@
+# Parametros del registro de metricas del Gran Prix
+metrics_logger:
+  ros__parameters:
+    ronda: 1
+    pare_reales: 2
+    long_optima_cm: 520.0
+    pare_falsos: 0
+    archivo_csv: '~/metricas_granprix.csv'
