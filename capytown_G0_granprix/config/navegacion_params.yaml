@@ -66,6 +66,8 @@ maze_solver:
     velocidad_alineacion_angular_radps: 0.3
     # FRENO_PARE solo detiene; luego continúa el mismo estado interno.
     tiempo_pare_s: 5.0
+    # Tras aceptar una deteccion de rojo, ignora nuevos flancos por este tiempo.
+    tiempo_ignorar_pare_s: 4.0
     tiempo_espera_camara_s: 0.5
     celda_inicio: A4
     celda_meta: F1

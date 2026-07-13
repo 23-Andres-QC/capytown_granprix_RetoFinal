@@ -88,6 +88,7 @@ class MazeSolverNode(Node):
         self._pare_activo = False
         self._pare_anterior = False
         self._pare_pendiente = False
+        self._pare_ignorar_hasta = None
         self._freno_pare_start = None
         self._wall_follow_cmd = Twist()
 
@@ -342,6 +343,10 @@ class MazeSolverNode(Node):
             # FRENO_PARE solo congela el movimiento; al terminar retoma
             # exactamente el estado interno que estaba ejecutando.
             'tiempo_pare_s': 5.0,
+            # Tras aceptar una deteccion de rojo, ignora nuevos flancos de
+            # deteccion durante este tiempo (evita que un parpadeo de la
+            # camara dispare un segundo FRENO_PARE por la misma senal).
+            'tiempo_ignorar_pare_s': 4.0,
             'tiempo_espera_camara_s': 0.5,
             'celda_inicio': 'A4',
             'celda_meta': 'F1',
@@ -463,6 +468,7 @@ class MazeSolverNode(Node):
         self._v_alinear_angular = float(g('velocidad_alineacion_angular_radps'))
 
         self._tiempo_pare = float(g('tiempo_pare_s'))
+        self._tiempo_ignorar_pare = float(g('tiempo_ignorar_pare_s'))
         self._tiempo_espera_camara = float(g('tiempo_espera_camara_s'))
 
         self._tiempo_espera_obstaculo = float(g('tiempo_espera_obstaculo_s'))
@@ -523,10 +529,18 @@ class MazeSolverNode(Node):
 
     def _on_pare(self, msg: Bool):
         detectado = bool(msg.data)
+        ahora = self.get_clock().now()
+        en_cooldown = (self._pare_ignorar_hasta is not None
+                       and ahora < self._pare_ignorar_hasta)
         # Solo el flanco de entrada dispara el freno. Mantener el cartel
         # delante de la cámara no reinicia continuamente los cinco segundos.
-        if detectado and not self._pare_anterior:
+        # Ademas, tras aceptar una deteccion se ignoran nuevos flancos
+        # durante tiempo_ignorar_pare_s (evita que un parpadeo de la camara
+        # cuente como una segunda senal de la misma parada).
+        if detectado and not self._pare_anterior and not en_cooldown:
             self._pare_pendiente = True
+            self._pare_ignorar_hasta = ahora + Duration(
+                nanoseconds=int(self._tiempo_ignorar_pare * 1e9))
         self._pare_activo = detectado
         self._pare_anterior = detectado
 
