@@ -66,8 +66,9 @@ maze_solver:
     velocidad_alineacion_angular_radps: 0.3
     # FRENO_PARE solo detiene; luego continúa el mismo estado interno.
     tiempo_pare_s: 5.0
-    # Tras cumplirse tiempo_pare_s, ignora nuevos flancos de rojo 4s mas.
-    tiempo_ignorar_pare_s: 4.0
+    # Tras cumplirse tiempo_pare_s, ignora nuevas detecciones de rojo hasta
+    # avanzar esta distancia (odometria) desde donde reanudo.
+    distancia_ignorar_pare_m: 0.60
     tiempo_espera_camara_s: 0.5
     celda_inicio: A4
     celda_meta: F1

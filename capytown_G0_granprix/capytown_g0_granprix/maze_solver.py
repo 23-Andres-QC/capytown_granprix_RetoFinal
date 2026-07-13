@@ -88,7 +88,7 @@ class MazeSolverNode(Node):
         self._pare_activo = False
         self._pare_anterior = False
         self._pare_pendiente = False
-        self._pare_ignorar_hasta = None
+        self._pare_ignorar_xy = None
         self._freno_pare_start = None
         self._wall_follow_cmd = Twist()
 
@@ -344,10 +344,11 @@ class MazeSolverNode(Node):
             # exactamente el estado interno que estaba ejecutando.
             'tiempo_pare_s': 5.0,
             # Tras cumplirse tiempo_pare_s (terminado el FRENO_PARE), ignora
-            # nuevos flancos de deteccion de rojo por este tiempo adicional
-            # (evita que un parpadeo de la camara sobre la misma senal
-            # dispare un segundo FRENO_PARE apenas termina el primero).
-            'tiempo_ignorar_pare_s': 4.0,
+            # nuevas detecciones de rojo hasta que el robot avance esta
+            # distancia (por odometria) desde el punto donde reanudo. Evita
+            # que el mismo cartel (u otro reflejo cercano) dispare un
+            # segundo FRENO_PARE sin haberse alejado de la senal.
+            'distancia_ignorar_pare_m': 0.60,
             'tiempo_espera_camara_s': 0.5,
             'celda_inicio': 'A4',
             'celda_meta': 'F1',
@@ -469,7 +470,7 @@ class MazeSolverNode(Node):
         self._v_alinear_angular = float(g('velocidad_alineacion_angular_radps'))
 
         self._tiempo_pare = float(g('tiempo_pare_s'))
-        self._tiempo_ignorar_pare = float(g('tiempo_ignorar_pare_s'))
+        self._distancia_ignorar_pare = float(g('distancia_ignorar_pare_m'))
         self._tiempo_espera_camara = float(g('tiempo_espera_camara_s'))
 
         self._tiempo_espera_obstaculo = float(g('tiempo_espera_obstaculo_s'))
@@ -530,15 +531,16 @@ class MazeSolverNode(Node):
 
     def _on_pare(self, msg: Bool):
         detectado = bool(msg.data)
-        ahora = self.get_clock().now()
-        en_cooldown = (self._pare_ignorar_hasta is not None
-                       and ahora < self._pare_ignorar_hasta)
+        en_cooldown = False
+        if self._pare_ignorar_xy is not None:
+            dx = self._odom_x - self._pare_ignorar_xy[0]
+            dy = self._odom_y - self._pare_ignorar_xy[1]
+            en_cooldown = math.hypot(dx, dy) < self._distancia_ignorar_pare
         # Solo el flanco de entrada dispara el freno. Mantener el cartel
         # delante de la cámara no reinicia continuamente los cinco segundos.
-        # Ademas, mientras dura el FRENO_PARE y los tiempo_ignorar_pare_s
-        # posteriores (ver _on_timer) se ignoran nuevos flancos: evita que
-        # un parpadeo de la camara cuente como una segunda senal de la
-        # misma parada.
+        # Ademas, tras cumplirse el FRENO_PARE (ver _on_timer) se ignoran
+        # nuevos flancos hasta avanzar distancia_ignorar_pare_m: evita que
+        # el mismo cartel dispare un segundo FRENO_PARE sin haberse alejado.
         if detectado and not self._pare_anterior and not en_cooldown:
             self._pare_pendiente = True
         self._pare_activo = detectado
@@ -632,12 +634,11 @@ class MazeSolverNode(Node):
             self._congelar_relojes_durante(elapsed)
             self._freno_pare_start = None
             # Ignora nuevos flancos de rojo (incluye los que hayan quedado
-            # pendientes por parpadeo durante la espera) por
-            # tiempo_ignorar_pare_s CONTADOS DESDE AHORA, es decir, recien
-            # despues de cumplido el tiempo_pare_s de espera.
+            # pendientes por parpadeo durante la espera) hasta que el robot
+            # avance distancia_ignorar_pare_m desde este punto -- recien
+            # cumplido el tiempo_pare_s de espera.
             self._pare_pendiente = False
-            self._pare_ignorar_hasta = self.get_clock().now() + Duration(
-                nanoseconds=int(self._tiempo_ignorar_pare * 1e9))
+            self._pare_ignorar_xy = (self._odom_x, self._odom_y)
             self._celdas_pare_respetadas.add(self._grid.cell)
             self._publish_event(
                 EV.PARE_RESPETADO,
