@@ -343,9 +343,10 @@ class MazeSolverNode(Node):
             # FRENO_PARE solo congela el movimiento; al terminar retoma
             # exactamente el estado interno que estaba ejecutando.
             'tiempo_pare_s': 5.0,
-            # Tras aceptar una deteccion de rojo, ignora nuevos flancos de
-            # deteccion durante este tiempo (evita que un parpadeo de la
-            # camara dispare un segundo FRENO_PARE por la misma senal).
+            # Tras cumplirse tiempo_pare_s (terminado el FRENO_PARE), ignora
+            # nuevos flancos de deteccion de rojo por este tiempo adicional
+            # (evita que un parpadeo de la camara sobre la misma senal
+            # dispare un segundo FRENO_PARE apenas termina el primero).
             'tiempo_ignorar_pare_s': 4.0,
             'tiempo_espera_camara_s': 0.5,
             'celda_inicio': 'A4',
@@ -534,13 +535,12 @@ class MazeSolverNode(Node):
                        and ahora < self._pare_ignorar_hasta)
         # Solo el flanco de entrada dispara el freno. Mantener el cartel
         # delante de la cámara no reinicia continuamente los cinco segundos.
-        # Ademas, tras aceptar una deteccion se ignoran nuevos flancos
-        # durante tiempo_ignorar_pare_s (evita que un parpadeo de la camara
-        # cuente como una segunda senal de la misma parada).
+        # Ademas, mientras dura el FRENO_PARE y los tiempo_ignorar_pare_s
+        # posteriores (ver _on_timer) se ignoran nuevos flancos: evita que
+        # un parpadeo de la camara cuente como una segunda senal de la
+        # misma parada.
         if detectado and not self._pare_anterior and not en_cooldown:
             self._pare_pendiente = True
-            self._pare_ignorar_hasta = ahora + Duration(
-                nanoseconds=int(self._tiempo_ignorar_pare * 1e9))
         self._pare_activo = detectado
         self._pare_anterior = detectado
 
@@ -631,6 +631,13 @@ class MazeSolverNode(Node):
 
             self._congelar_relojes_durante(elapsed)
             self._freno_pare_start = None
+            # Ignora nuevos flancos de rojo (incluye los que hayan quedado
+            # pendientes por parpadeo durante la espera) por
+            # tiempo_ignorar_pare_s CONTADOS DESDE AHORA, es decir, recien
+            # despues de cumplido el tiempo_pare_s de espera.
+            self._pare_pendiente = False
+            self._pare_ignorar_hasta = self.get_clock().now() + Duration(
+                nanoseconds=int(self._tiempo_ignorar_pare * 1e9))
             self._celdas_pare_respetadas.add(self._grid.cell)
             self._publish_event(
                 EV.PARE_RESPETADO,
