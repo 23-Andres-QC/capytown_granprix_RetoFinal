@@ -41,8 +41,8 @@ maze_solver:
     ganancia_distancia_recta: 3.5
     angular_max_recta_radps: 0.7
     frente_confirmaciones_ciclos: 3
-    distancia_chequeo_pared_m: 0.10
-    tiempo_chequeo_pared_s: 0.2
+    distancia_chequeo_pared_m: 0.20
+    tiempo_chequeo_pared_s: 0.5
     chequeo_pared_confirmaciones_ciclos: 5
     avance_giro_vacio_m: 0.12
     giro_vacio_max_repeticiones: 2
@@ -52,7 +52,7 @@ maze_solver:
     umbral_lado_libre_m: 0.3
     umbral_colision_m: 0.15
     # Al bloquearse por obstaculo frontal, retrocede esta distancia antes
-    # de quedar esperando, girando hacia la izquierda mientras retrocede.
+    # de quedar esperando, girando hacia la derecha mientras retrocede.
     retroceso_obstaculo_m: 0.05
     velocidad_retroceso_obstaculo_mps: 0.06
     velocidad_retroceso_obstaculo_angular_radps: 0.3

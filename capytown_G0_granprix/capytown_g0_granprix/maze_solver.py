@@ -310,8 +310,8 @@ class MazeSolverNode(Node):
             # (PAUSA_CHEQUEO_PARED) tiempo_chequeo_pared_s y verifica
             # con distancia PUNTUAL (no la linea) si el lado seguido
             # esta ocupado o vacio.
-            'distancia_chequeo_pared_m': 0.10,
-            'tiempo_chequeo_pared_s': 0.2,
+            'distancia_chequeo_pared_m': 0.20,
+            'tiempo_chequeo_pared_s': 0.5,
             # "Lado derecho vacio" tiene que sostenerse esta cantidad
             # de ciclos SEGUIDOS (no una sola lectura) antes de
             # comprometerse a girar -- un giro a la derecha es una
@@ -802,10 +802,10 @@ class MazeSolverNode(Node):
                 return True
             cmd = Twist()
             cmd.linear.x = -self._v_retroceso_obstaculo
-            # Retrocede en arco girando hacia la IZQUIERDA (mismo signo
-            # positivo que 'IZQUIERDA' en _handle_girar/_ejecutar_giro_ruta),
-            # no en linea recta.
-            cmd.angular.z = self._w_retroceso_obstaculo
+            # Retrocede en arco girando hacia la DERECHA (signo negativo,
+            # mismo convenio que 'DERECHA' en _handle_girar/
+            # _ejecutar_giro_ruta), no en linea recta.
+            cmd.angular.z = -self._w_retroceso_obstaculo
             self._publish_twist(cmd)
             return True
 
