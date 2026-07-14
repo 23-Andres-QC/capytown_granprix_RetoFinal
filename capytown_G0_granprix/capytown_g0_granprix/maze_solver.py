@@ -312,7 +312,7 @@ class MazeSolverNode(Node):
             # Al bloquearse por obstaculo frontal, retrocede esta distancia
             # (odometria) antes de quedar esperando -- despega del objeto en
             # vez de solo detenerse en seco.
-            'retroceso_obstaculo_m': 0.03,
+            'retroceso_obstaculo_m': 0.05,
             'velocidad_retroceso_obstaculo_mps': 0.06,
             # Distancia lateral MINIMA al lado seguido (izquierda): si el LiDAR
             # ve la pared izquierda mas cerca que esto, se corrige alejandose
@@ -550,8 +550,19 @@ class MazeSolverNode(Node):
         # Ademas, tras cumplirse el FRENO_PARE (ver _on_timer) se ignoran
         # nuevos flancos hasta avanzar distancia_ignorar_pare_m: evita que
         # el mismo cartel dispare un segundo FRENO_PARE sin haberse alejado.
-        if detectado and not self._pare_anterior and not en_cooldown:
-            self._pare_pendiente = True
+        if detectado and not self._pare_anterior:
+            if en_cooldown:
+                # Diagnostico: confirma que el cooldown esta activo y
+                # descartando flancos repetidos del mismo cartel.
+                dx = self._odom_x - self._pare_ignorar_xy[0]
+                dy = self._odom_y - self._pare_ignorar_xy[1]
+                self._publish_event(
+                    EV.PARE_FALSO,
+                    f'rojo ignorado (cooldown): avanzo {math.hypot(dx, dy):.2f}m '
+                    f'de {self._distancia_ignorar_pare:.2f}m requeridos'
+                )
+            else:
+                self._pare_pendiente = True
         self._pare_activo = detectado
         self._pare_anterior = detectado
 
