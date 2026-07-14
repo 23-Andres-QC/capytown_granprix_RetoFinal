@@ -114,6 +114,7 @@ class MazeSolverNode(Node):
         self._avanzando_post_retroceso = False
         self._avance_post_retroceso_xy0 = (0.0, 0.0)
         self._contador_frente_dos_reglas = 0
+        self._contador_lado_libre_temprano = 0
         self._yaw_inicio_giro = 0.0
         self._imu_acum_giro = 0.0
         self._imu_t_prev = None
@@ -1090,8 +1091,37 @@ class MazeSolverNode(Node):
 
         El color verde es solo un marcador de visualización. No forma parte
         de estas reglas y nunca modifica el estado ni el comando de velocidad.
+
+        Regla 0 (deteccion TEMPRANA del vacio, EN MOVIMIENTO): no espera a
+        completar distancia_chequeo_pared_m -- si el lado seguido aparece
+        libre sostenido chequeo_pared_confirmaciones_ciclos ciclos seguidos
+        mientras avanza, gira de inmediato (mismo criterio y misma
+        confirmacion por varios ciclos que el chequeo puntual detenido de
+        la regla 3, solo que evaluado sin parar). Se prioriza sobre las
+        reglas 1-4: encontrar el hueco antes evita pasarlo de largo
+        esperando el proximo chequeo periodico.
         """
         z = self._zones
+
+        lado_libre_temprano = bool(
+            self._lado_valid(z) and self._lado_distancia(z) > self._umbral_lado_libre)
+        self._contador_lado_libre_temprano = (
+            self._contador_lado_libre_temprano + 1 if lado_libre_temprano else 0)
+        if self._contador_lado_libre_temprano >= self._chequeo_pared_confirmaciones_ciclos:
+            self._contador_lado_libre_temprano = 0
+            self._publish_twist(Twist())
+            self._decision_actual = self._direccion_vacio()
+            self._yaw_inicio_giro = self._yaw
+            self._giro_vacio_fase = 1
+            self._giro_vacio_repeticiones = 0
+            self._contador_giros_fisicos += 1
+            self._publish_event(
+                EV.GIRO,
+                f'lado seguido vacio en movimiento ({self._lado_distancia(z):.2f}m) '
+                f'-> {self._decision_actual}'
+            )
+            self._set_state('GIRAR')
+            return
 
         dx = self._odom_x - self._avance_chequeo_start_xy[0]
         dy = self._odom_y - self._avance_chequeo_start_xy[1]
