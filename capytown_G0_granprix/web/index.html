@@ -348,20 +348,6 @@
     const { celdas: RUTA_EXPLORACION_CELDAS, finPorVertice: RUTA_EXPLORACION_TRAMO_FIN } =
       expandirRutaCeldas(RUTA_EXPLORACION);
 
-    // Proyecta un punto (px,py) sobre el segmento [a,b] de la ruta fija,
-    // recortado a los extremos -- el carrito y el cartel PARE se dibujan
-    // SIEMPRE sobre la ruta, nunca fuera de ella. Solo se usa la odometria
-    // en vivo para saber cuanto avanzo DENTRO del tramo ya sabido (1
-    // dimension, no puede desviarse), nunca para inventar la forma.
-    function proyectarEnSegmento(px, py, ax, ay, bx, by) {
-      const dx = bx - ax, dy = by - ay;
-      const len2 = dx * dx + dy * dy;
-      if (len2 < 1e-9) return [ax, ay];
-      let t = ((px - ax) * dx + (py - ay) * dy) / len2;
-      t = Math.max(0, Math.min(1, t));
-      return [ax + t * dx, ay + t * dy];
-    }
-
     // Celda de la ruta fija mas cercana a un punto en vivo (para el cartel
     // PARE: no hay una señal de "en que tramo paso" por cada evento viejo,
     // asi que se ancla al punto de la ruta mas cercano en vez de al punto
@@ -835,24 +821,20 @@
       const celdasListas = RUTA_EXPLORACION_TRAMO_FIN[verticesListos] + 1;
       const metaVista = !!(d.verde_pos && d.verde_pos.length > 0);
 
-      // Punta en vivo: el tramo ya completado llega hasta el vertice
-      // verticesListos; dentro del tramo en curso (hacia el siguiente
-      // vertice), se usa d.pos SOLO para saber cuanto avanzo a lo largo de
-      // ESE segmento conocido -- proyectado y recortado, nunca puede
-      // separarse de la linea. El carrito y el cartel PARE se anclan aca.
+      // Punta = ultimo vertice YA confirmado por giros_fisicos. SIN
+      // proyeccion de d.pos, a proposito: cualquier ruido/deriva de
+      // odometria dentro del tramo en curso ya no mueve la punta ni la
+      // linea -- se queda quieta en el ultimo vertice hasta que llegue el
+      // siguiente giro real, y entonces salta (sin animacion) al proximo
+      // vertice. 100% hardcodeado, cero calculo en vivo sobre la forma.
       const vA = RUTA_EXPLORACION[verticesListos];
       const vB = RUTA_EXPLORACION[verticesListos + 1] || vA;
-      let puntaX = vA[0] + 0.5, puntaY = vA[1] + 0.5;
+      const puntaX = vA[0] + 0.5, puntaY = vA[1] + 0.5;
       let rumboX = vB[0] - vA[0], rumboY = vB[1] - vA[1];
-      if (d.pos) {
-        [puntaX, puntaY] = proyectarEnSegmento(
-          Number(d.pos[0]), Number(d.pos[1]),
-          vA[0] + 0.5, vA[1] + 0.5, vB[0] + 0.5, vB[1] + 0.5
-        );
-      }
-      if (rumboX === 0 && rumboY === 0 && d.head) {
-        rumboX = Number(d.head[0]);
-        rumboY = Number(d.head[1]);
+      if (rumboX === 0 && rumboY === 0) {
+        const vPrev = RUTA_EXPLORACION[Math.max(0, verticesListos - 1)];
+        rumboX = vA[0] - vPrev[0];
+        rumboY = vA[1] - vPrev[1];
       }
 
       ctx.fillStyle = "rgba(79, 131, 255, 0.26)";
@@ -899,7 +881,7 @@
         ctx.restore();
       }
 
-      // Recorrido dibujado = ruta fija revelada por `tramo`, no la
+      // Recorrido dibujado = ruta fija revelada por `giros_fisicos`, no la
       // trayectoria de odometria. La linea siempre termina exactamente en
       // la punta (puntaX,puntaY) donde se dibuja el carrito mas abajo.
       {
