@@ -447,7 +447,7 @@ class MazeSolverNode(Node):
             # llegado a su distancia (la distancia del ultimo es un tope de
             # seguridad por si el verde no se detecta a tiempo).
             'ruta_fija_giros': ['NINGUNO', 'DERECHA', 'IZQUIERDA', 'DERECHA'],
-            'ruta_fija_distancias_m': [1.05, 1.05, 0.55, 1.85],
+            'ruta_fija_distancias_m': [1.02, 1.02, 0.55, 1.85],
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)

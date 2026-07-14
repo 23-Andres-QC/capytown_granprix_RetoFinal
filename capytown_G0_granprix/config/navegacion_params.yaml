@@ -105,4 +105,4 @@ maze_solver:
     # corta antes si detecta verde (su distancia es solo un tope de
     # seguridad).
     ruta_fija_giros: [NINGUNO, DERECHA, IZQUIERDA, DERECHA]
-    ruta_fija_distancias_m: [1.05, 1.05, 0.55, 1.85]
+    ruta_fija_distancias_m: [1.02, 1.02, 0.55, 1.85]
