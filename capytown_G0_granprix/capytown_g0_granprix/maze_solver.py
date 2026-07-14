@@ -433,11 +433,15 @@ class MazeSolverNode(Node):
             # Ruta rapida FIJA (fase 2): guion de tramos fijo, ya conocido de
             # la pista, en vez de calcularlo por BFS sobre el grafo mapeado.
             # ruta_fija_giros tiene un giro por tramo (relativo: NINGUNO gira
-            # nada); ruta_fija_distancias_m tiene la distancia de cada tramo
-            # EXCEPTO el ultimo, que siempre avanza recto hasta detectar
-            # verde (por eso hay un giro mas que distancias).
+            # nada) y ruta_fija_distancias_m la distancia de CADA tramo (misma
+            # cantidad de elementos). El PRIMER y el ULTIMO tramo usan
+            # wall-follow (correccion lateral Kp, igual que el mapeo) para
+            # mantenerse rectos en vez de ir a ciegas por odometria; el
+            # ULTIMO tramo ademas corta apenas detecta verde, aunque no haya
+            # llegado a su distancia (la distancia del ultimo es un tope de
+            # seguridad por si el verde no se detecta a tiempo).
             'ruta_fija_giros': ['NINGUNO', 'DERECHA', 'IZQUIERDA', 'DERECHA'],
-            'ruta_fija_distancias_m': [1.10, 1.10, 0.60],
+            'ruta_fija_distancias_m': [1.05, 1.05, 0.55, 1.85],
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -939,6 +943,37 @@ class MazeSolverNode(Node):
     def _lado_distancia(self, z) -> float:
         return z.left if self._seguir_izquierda else z.right
 
+    def _twist_wall_follow(self) -> Twist:
+        """Twist de avance recto con correccion lateral Kp hacia la pared
+        seguida (mismo ajuste de linea del mapeo). Reutilizado por
+        AVANZAR_PARALELO y por los tramos de la ruta fija marcados
+        wall_follow=True (para 'mantenerse recto' en vez de ir a ciegas
+        por odometria)."""
+        z = self._zones
+        cmd = Twist()
+        if not self._line_valid(z):
+            # Perdida no confirmada todavia (podria ser un solo vistazo
+            # de ruido): avanzar recto, sin corregir nada.
+            cmd.linear.x = self._velocidad_recta
+            return cmd
+        # Termino de ANGULO: mismo signo sin importar el lado (dos
+        # paredes paralelas se ven con la misma pendiente aparente desde
+        # un mismo error de heading). Termino de DISTANCIA: signo opuesto
+        # segun el lado (alejarse de la pared seguida es IZQUIERDA si se
+        # sigue la derecha, DERECHA si se sigue la izquierda).
+        signo_distancia = -1.0 if self._seguir_izquierda else 1.0
+        error_distancia = self._distancia_objetivo_recta - self._line_distance(z)
+        correccion = (self._ganancia_angulo_recta * self._line_angle(z)
+                      + signo_distancia * self._ganancia_distancia_recta * error_distancia)
+        # Anti-choque lateral (LiDAR): si la pared seguida esta MUY cerca
+        # (< umbral_lateral_min), fuerza el giro maximo alejandose para no
+        # rozarla, sin confiar solo en el termino Kp.
+        if self._lado_valid(z) and self._lado_distancia(z) < self._umbral_lateral_min:
+            correccion = signo_distancia * self._angular_max_recta
+        cmd.linear.x = self._velocidad_recta
+        cmd.angular.z = max(-self._angular_max_recta, min(self._angular_max_recta, correccion))
+        return cmd
+
     def _direccion_obstaculo(self) -> str:
         """Obstaculo al frente: gira ALEJANDOSE de la pared que se sigue."""
         return 'DERECHA' if self._seguir_izquierda else 'IZQUIERDA'
@@ -1088,31 +1123,7 @@ class MazeSolverNode(Node):
             self._set_state('PAUSA_CHEQUEO_PARED')
             return
 
-        cmd = Twist()
-        if not self._line_valid(z):
-            # Perdida no confirmada todavia (podria ser un solo
-            # vistazo de ruido): avanzar recto, sin corregir nada.
-            cmd.linear.x = self._velocidad_recta
-            self._publish_twist(cmd)
-            return
-        # Termino de ANGULO: mismo signo sin importar el lado (dos
-        # paredes paralelas se ven con la misma pendiente aparente
-        # desde un mismo error de heading). Termino de DISTANCIA:
-        # signo opuesto segun el lado (alejarse de la pared seguida es
-        # IZQUIERDA si se sigue la derecha, DERECHA si se sigue la
-        # izquierda) -- ver nota larga junto a _line_*/_lado_* arriba.
-        signo_distancia = -1.0 if self._seguir_izquierda else 1.0
-        error_distancia = self._distancia_objetivo_recta - self._line_distance(z)
-        correccion = (self._ganancia_angulo_recta * self._line_angle(z)
-                      + signo_distancia * self._ganancia_distancia_recta * error_distancia)
-        # Anti-choque lateral (LiDAR): si la pared seguida esta MUY cerca
-        # (< umbral_lateral_min), fuerza el giro maximo alejandose para no
-        # rozarla, sin confiar solo en el termino Kp.
-        if self._lado_valid(z) and self._lado_distancia(z) < self._umbral_lateral_min:
-            correccion = signo_distancia * self._angular_max_recta
-        cmd.linear.x = self._velocidad_recta
-        cmd.angular.z = max(-self._angular_max_recta, min(self._angular_max_recta, correccion))
-        self._publish_twist(cmd)
+        self._publish_twist(self._twist_wall_follow())
 
     def _handle_pausa_chequeo_pared(self):
         """Detenido tiempo_chequeo_pared_s (0.5s) -- ya sea por el
@@ -1504,15 +1515,19 @@ class MazeSolverNode(Node):
     def _calcular_ruta(self) -> bool:
         """Carga la ruta rapida FIJA: un guion de tramos fijo y conocido de
         la pista (ruta_fija_giros/ruta_fija_distancias_m), en vez de
-        calcularlo por BFS sobre el grafo mapeado. El ultimo tramo siempre
-        avanza recto hasta detectar verde (distancia_m=None). NO mueve el
-        carrito ni cambia de estado. Devuelve True (la ruta fija siempre
-        esta disponible, no depende de haber visto el verde antes)."""
+        calcularlo por BFS sobre el grafo mapeado. El primer y el ultimo
+        tramo usan wall-follow (mantenerse recto); el ultimo ademas corta
+        apenas detecta verde, aunque no haya llegado a su distancia (tope
+        de seguridad). NO mueve el carrito ni cambia de estado. Devuelve
+        True (la ruta fija siempre esta disponible, no depende de haber
+        visto el verde antes)."""
+        n = len(self._ruta_fija_giros)
         self._ruta_movimientos = [
             {
                 'giro': giro,
-                'distancia_m': (self._ruta_fija_distancias[i]
-                                if i < len(self._ruta_fija_distancias) else None),
+                'distancia_m': self._ruta_fija_distancias[i],
+                'wall_follow': i == 0 or i == n - 1,
+                'hasta_verde': i == n - 1,
             }
             for i, giro in enumerate(self._ruta_fija_giros)
         ]
@@ -1548,11 +1563,13 @@ class MazeSolverNode(Node):
     def _handle_seguir_ruta(self):
         """Maneja la ruta corta obedeciendo SOLO el guion de movimientos.
 
-        No sigue pared ni ajusta linea: gira lo que dice la ruta (giro fijo
-        de 90/180 cerrado por yaw) y avanza en recto la distancia indicada
-        (cerrado por odometria; el ultimo tramo no tiene distancia fija,
-        avanza hasta detectar verde). La anticolision es la unica capa
-        reactiva y ya corre global en _on_timer antes de este handler.
+        Gira lo que dice la ruta (giro fijo de 90/180 cerrado por yaw) y
+        avanza en recto la distancia indicada (cerrado por odometria; el
+        ultimo tramo corta antes si detecta verde). El primer y el ultimo
+        tramo ademas usan wall-follow (ajuste de linea, mantenerse recto);
+        los del medio van a ciegas por odometria. La anticolision es la
+        unica capa reactiva global y ya corre en _on_timer antes de este
+        handler.
         """
         self._republicar_ruta()
         if (self._ruta_movimientos is None
@@ -1570,7 +1587,9 @@ class MazeSolverNode(Node):
         if self._ruta_fase == 'GIRO':
             self._ejecutar_giro_ruta(mov['giro'])
         else:
-            self._ejecutar_avance_ruta(mov['distancia_m'])
+            self._ejecutar_avance_ruta(
+                mov['distancia_m'], mov.get('wall_follow', False),
+                mov.get('hasta_verde', False))
 
     def _iniciar_avance_ruta(self):
         self._ruta_fase = 'AVANCE'
@@ -1604,20 +1623,17 @@ class MazeSolverNode(Node):
         cmd.angular.z = self._v_giro_angular if izquierda else -self._v_giro_angular
         self._publish_twist(cmd)
 
-    def _ejecutar_avance_ruta(self, distancia_m):
-        """Avanza recto ``distancia_m`` (por odometria). Si es ``None``,
-        avanza recto SIN limite de distancia hasta detectar verde (tramo
-        final de la ruta fija)."""
-        if distancia_m is None:
-            if self._verde_anterior:
-                self._publish_twist(Twist())
-                self._ruta_idx += 1
-                self._ruta_fase = 'GIRO'
-                self._ruta_giro_restante = None
-                return
-            cmd = Twist()
-            cmd.linear.x = self._velocidad_recta
-            self._publish_twist(cmd)
+    def _ejecutar_avance_ruta(self, distancia_m, wall_follow=False, hasta_verde=False):
+        """Avanza recto ``distancia_m`` (por odometria). Si ``hasta_verde``,
+        corta apenas se detecta verde aunque no se haya llegado a
+        ``distancia_m`` (que en ese caso es solo un tope de seguridad). Si
+        ``wall_follow``, usa correccion lateral Kp (mantenerse recto) en vez
+        de ir a ciegas por odometria."""
+        if hasta_verde and self._verde_anterior:
+            self._publish_twist(Twist())
+            self._ruta_idx += 1
+            self._ruta_fase = 'GIRO'
+            self._ruta_giro_restante = None
             return
 
         dx = self._odom_x - self._ruta_avance_xy0[0]
@@ -1627,6 +1643,10 @@ class MazeSolverNode(Node):
             self._ruta_idx += 1
             self._ruta_fase = 'GIRO'
             self._ruta_giro_restante = None
+            return
+
+        if wall_follow:
+            self._publish_twist(self._twist_wall_follow())
             return
         cmd = Twist()
         cmd.linear.x = self._velocidad_recta

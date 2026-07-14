@@ -97,7 +97,9 @@ maze_solver:
     tamano_celda_m: 0.30
     ruta_celda_inicio: A7
     ruta_heading_inicial: NORTE
-    # Ruta rapida FIJA: un giro por tramo (relativo); distancias solo para
-    # los primeros tramos -- el ultimo siempre avanza hasta detectar verde.
+    # Ruta rapida FIJA: un giro y una distancia por tramo. El primer y el
+    # ultimo tramo usan wall-follow (mantenerse recto); el ultimo ademas
+    # corta antes si detecta verde (su distancia es solo un tope de
+    # seguridad).
     ruta_fija_giros: [NINGUNO, DERECHA, IZQUIERDA, DERECHA]
-    ruta_fija_distancias_m: [1.10, 1.10, 0.60]
+    ruta_fija_distancias_m: [1.05, 1.05, 0.55, 1.85]

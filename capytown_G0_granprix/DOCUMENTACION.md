@@ -161,21 +161,25 @@ El carrito **NUNCA frena ni parte solo**. La ruta se maneja en **dos comandos**:
   `ESPERA_RUTA` (detenido), así podés colocarlo de nuevo en el inicio y
   reenviar el comando cuantas veces quieras para probar.
 
-El guion fijo por defecto: avanza 1.10m recto, gira 90° DERECHA, avanza 1.10m,
-gira 90° IZQUIERDA, avanza 0.60m, gira 90° DERECHA y avanza recto **sin límite
-de distancia hasta detectar verde** (el último tramo no tiene distancia fija).
-Durante todo el guion siguen activas la detección de rojo (PARE/FRENO_PARE) y
-verde, y la anticolisión — solo cambia que el carrito ya no sigue pared ni
-ajusta línea, obedece ciegamente giros fijos de 90° (cerrados por yaw) y
-avances rectos por odometría. Colocá el carrito en el inicio mirando NORTE
-antes de partir.
+El guion fijo por defecto: avanza 1.05m recto, gira 90° DERECHA, avanza 1.05m,
+gira 90° IZQUIERDA, avanza 0.55m, gira 90° DERECHA y avanza recto hasta 1.85m
+o hasta detectar verde (lo que ocurra primero — 1.85m es un tope de seguridad,
+no la condición normal de corte). El primer y el último tramo usan
+**wall-follow** (la misma corrección lateral Kp del mapeo) para mantenerse
+rectos; los tramos del medio van a ciegas por odometría. Durante todo el
+guion siguen activas la detección de rojo (PARE/FRENO_PARE), verde y la
+anticolisión — solo cambia que el carrito no decide giros ni cuenta celdas,
+obedece ciegamente el guion (giros fijos de 90° cerrados por yaw). Colocá el
+carrito en el inicio mirando NORTE antes de partir.
 
 Parámetros (sincronizados con `navegacion_params.yaml`): `ruta_activa`,
 `ruta_fija_giros` (lista de giros relativos, uno por tramo: `NINGUNO` no gira),
-`ruta_fija_distancias_m` (distancia de cada tramo salvo el último, que siempre
-es "hasta detectar verde"), `tamano_celda_m` (0.30, aún usado para discretizar
-el grafo grabado pasivamente), `ruta_celda_inicio` (A7), `ruta_heading_inicial`,
-`verde_topic`, `ruta_topic`, `calcular_ruta_topic`, `iniciar_ruta_topic`.
+`ruta_fija_distancias_m` (distancia de cada tramo, misma cantidad de elementos
+que `ruta_fija_giros`; la del último es un tope de seguridad ya que ese tramo
+corta antes si detecta verde), `tamano_celda_m` (0.30, aún usado para
+discretizar el grafo grabado pasivamente), `ruta_celda_inicio` (A7),
+`ruta_heading_inicial`, `verde_topic`, `ruta_topic`, `calcular_ruta_topic`,
+`iniciar_ruta_topic`.
 
 Riesgo a calibrar en pista: el guion es *open-loop* (odometría), así que
 depende de `factor_dist_odom`/`factor_ang_odom`; la anticolisión evita choques
