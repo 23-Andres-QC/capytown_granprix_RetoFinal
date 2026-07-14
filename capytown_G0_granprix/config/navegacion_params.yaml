@@ -52,9 +52,10 @@ maze_solver:
     umbral_lado_libre_m: 0.3
     umbral_colision_m: 0.15
     # Al bloquearse por obstaculo frontal, retrocede esta distancia antes
-    # de quedar esperando.
+    # de quedar esperando, girando hacia la izquierda mientras retrocede.
     retroceso_obstaculo_m: 0.05
     velocidad_retroceso_obstaculo_mps: 0.06
+    velocidad_retroceso_obstaculo_angular_radps: 0.3
     umbral_lateral_min_m: 0.07
     correccion_giro_360: true
     correccion_giro_grados: 10.0

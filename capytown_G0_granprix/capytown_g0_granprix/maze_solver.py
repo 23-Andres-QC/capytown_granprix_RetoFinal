@@ -344,9 +344,11 @@ class MazeSolverNode(Node):
             'umbral_colision_m': 0.15,
             # Al bloquearse por obstaculo frontal, retrocede esta distancia
             # (odometria) antes de quedar esperando -- despega del objeto en
-            # vez de solo detenerse en seco.
+            # vez de solo detenerse en seco. El retroceso gira hacia la
+            # IZQUIERDA mientras retrocede (arco, no en linea recta).
             'retroceso_obstaculo_m': 0.05,
             'velocidad_retroceso_obstaculo_mps': 0.06,
+            'velocidad_retroceso_obstaculo_angular_radps': 0.3,
             # Distancia lateral MINIMA al lado seguido (izquierda): si el LiDAR
             # ve la pared izquierda mas cerca que esto, se corrige alejandose
             # con fuerza para no rozarla (anti-choque lateral, ver
@@ -493,6 +495,7 @@ class MazeSolverNode(Node):
         self._umbral_colision = float(g('umbral_colision_m'))
         self._retroceso_obstaculo = float(g('retroceso_obstaculo_m'))
         self._v_retroceso_obstaculo = float(g('velocidad_retroceso_obstaculo_mps'))
+        self._w_retroceso_obstaculo = float(g('velocidad_retroceso_obstaculo_angular_radps'))
         self._umbral_lateral_min = float(g('umbral_lateral_min_m'))
         self._correccion_giro_360 = bool(g('correccion_giro_360'))
         self._correccion_giro_rad = math.radians(float(g('correccion_giro_grados')))
@@ -799,6 +802,10 @@ class MazeSolverNode(Node):
                 return True
             cmd = Twist()
             cmd.linear.x = -self._v_retroceso_obstaculo
+            # Retrocede en arco girando hacia la IZQUIERDA (mismo signo
+            # positivo que 'IZQUIERDA' en _handle_girar/_ejecutar_giro_ruta),
+            # no en linea recta.
+            cmd.angular.z = self._w_retroceso_obstaculo
             self._publish_twist(cmd)
             return True
 
