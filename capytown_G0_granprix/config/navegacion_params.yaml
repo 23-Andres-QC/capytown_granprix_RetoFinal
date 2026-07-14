@@ -41,8 +41,8 @@ maze_solver:
     ganancia_distancia_recta: 3.5
     angular_max_recta_radps: 0.7
     frente_confirmaciones_ciclos: 3
-    distancia_chequeo_pared_m: 0.12
-    tiempo_chequeo_pared_s: 0.5
+    distancia_chequeo_pared_m: 0.10
+    tiempo_chequeo_pared_s: 0.2
     chequeo_pared_confirmaciones_ciclos: 5
     avance_giro_vacio_m: 0.12
     giro_vacio_max_repeticiones: 2

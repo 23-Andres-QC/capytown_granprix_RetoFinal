@@ -310,8 +310,8 @@ class MazeSolverNode(Node):
             # (PAUSA_CHEQUEO_PARED) tiempo_chequeo_pared_s y verifica
             # con distancia PUNTUAL (no la linea) si el lado seguido
             # esta ocupado o vacio.
-            'distancia_chequeo_pared_m': 0.12,
-            'tiempo_chequeo_pared_s': 0.5,
+            'distancia_chequeo_pared_m': 0.10,
+            'tiempo_chequeo_pared_s': 0.2,
             # "Lado derecho vacio" tiene que sostenerse esta cantidad
             # de ciclos SEGUIDOS (no una sola lectura) antes de
             # comprometerse a girar -- un giro a la derecha es una
