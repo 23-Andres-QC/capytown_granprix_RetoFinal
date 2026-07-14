@@ -53,7 +53,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSPresetProfiles
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import Imu, LaserScan
 from std_msgs.msg import Bool, String
 
 from capytown_g0_granprix import motion_events as EV
@@ -114,6 +114,8 @@ class MazeSolverNode(Node):
         self._retroceso_obstaculo_xy0 = (0.0, 0.0)
         self._contador_frente_dos_reglas = 0
         self._yaw_inicio_giro = 0.0
+        self._imu_acum_giro = 0.0
+        self._imu_t_prev = None
         self._pausa_chequeo_start = None
         self._contador_derecha_libre = 0
         self._chequeo_por_frente = False
@@ -194,6 +196,9 @@ class MazeSolverNode(Node):
             LaserScan, self._scan_topic, self._on_scan, QoSPresetProfiles.SENSOR_DATA.value
         )
         self.create_subscription(Odometry, self._odom_topic, self._on_odom, 10)
+        self.create_subscription(
+            Imu, self._imu_topic, self._on_imu, QoSPresetProfiles.SENSOR_DATA.value
+        )
         self.create_subscription(Bool, self._pare_topic, self._on_pare, 10)
         # El verde no controla el mapeo: solo marca la celda de la meta para
         # poder calcular la ruta corta al regresar a la base (fase 2).
@@ -235,6 +240,12 @@ class MazeSolverNode(Node):
             'outlier_residuo_m': 0.03,
             'lidar_zones_topic': '/lidar_zones',
             'odom_topic': '/odom_raw',
+            # Deteccion de patinaje en giros: compara cuanto giro segun la
+            # odometria de rueda vs. cuanto giro segun el giroscopio del IMU
+            # (no depende de las ruedas). Una diferencia grande indica que
+            # una rueda patino durante el giro.
+            'imu_topic': '/imu',
+            'umbral_patinaje_deg': 8.0,
             'cmd_vel_topic': '/cmd_vel',
             'wall_follow_topic': '/wall_follow/cmd_vel_suggestion',
             'pare_topic': '/pare_detectado',
@@ -449,6 +460,8 @@ class MazeSolverNode(Node):
 
         self._lidar_zones_topic = g('lidar_zones_topic')
         self._odom_topic = g('odom_topic')
+        self._imu_topic = g('imu_topic')
+        self._umbral_patinaje = float(g('umbral_patinaje_deg'))
         self._cmd_vel_topic = g('cmd_vel_topic')
         self._wall_follow_topic = g('wall_follow_topic')
         self._pare_topic = g('pare_topic')
@@ -567,6 +580,16 @@ class MazeSolverNode(Node):
             dy = self._odom_y - self._odom_prev_xy[1]
             self._distancia_total_m += math.hypot(dx, dy)
         self._odom_prev_xy = (self._odom_x, self._odom_y)
+
+    def _on_imu(self, msg: Imu):
+        """Integra el giroscopio (angular_velocity.z) SOLO durante GIRAR,
+        para comparar contra el angulo girado por odometria de rueda al
+        terminar el giro y detectar patinaje (ver _handle_girar)."""
+        ahora = self.get_clock().now()
+        if self._state == 'GIRAR' and self._imu_t_prev is not None:
+            dt = (ahora - self._imu_t_prev).nanoseconds / 1e9
+            self._imu_acum_giro += msg.angular_velocity.z * dt
+        self._imu_t_prev = ahora
 
     def _on_pare(self, msg: Bool):
         detectado = bool(msg.data)
@@ -1305,6 +1328,20 @@ class MazeSolverNode(Node):
             self.get_logger().info(
                 f'GIRO TERMINADO (90 fijo): girado={math.degrees(angulo_girado):.0f} deg'
             )
+            # Deteccion de patinaje: compara lo girado por odometria de
+            # rueda contra lo girado por el giroscopio (IMU, no depende de
+            # las ruedas) durante este mismo giro. Una diferencia grande
+            # indica que una rueda patino (giro real distinto del medido
+            # por las ruedas).
+            odom_deg = math.degrees(angulo_girado)
+            imu_deg = abs(math.degrees(self._imu_acum_giro))
+            diff_deg = abs(odom_deg - imu_deg)
+            if diff_deg > self._umbral_patinaje:
+                self._publish_event(
+                    EV.PATINAJE,
+                    f'posible patinaje: odom={odom_deg:.0f}° imu={imu_deg:.0f}° '
+                    f'diff={diff_deg:.0f}°'
+                )
             if self._giro_vacio_fase == 1:
                 self._avance_fijo_inicio_xy = (self._odom_x, self._odom_y)
                 self._set_state('AVANCE_GIRO_VACIO')
@@ -1627,6 +1664,9 @@ class MazeSolverNode(Node):
         # TERMINADO), asi que loguear tambien la transicion de estado
         # en si duplicaba la info. El topico /robot_state (para otros
         # nodos/herramientas) se sigue publicando igual.
+        if new_state == 'GIRAR' and self._state != 'GIRAR':
+            self._imu_acum_giro = 0.0
+            self._imu_t_prev = self.get_clock().now()
         self._state = new_state
         self._state_pub.publish(String(data=self._state))
 

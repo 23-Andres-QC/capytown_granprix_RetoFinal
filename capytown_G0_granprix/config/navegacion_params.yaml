@@ -21,6 +21,9 @@ maze_solver:
     outlier_residuo_m: 0.03
     lidar_zones_topic: /lidar_zones
     odom_topic: /odom_raw
+    # Deteccion de patinaje en giros (odometria de rueda vs. giroscopio IMU).
+    imu_topic: /imu
+    umbral_patinaje_deg: 8.0
     cmd_vel_topic: /cmd_vel
     wall_follow_topic: /wall_follow/cmd_vel_suggestion
     pare_topic: /pare_detectado
