@@ -348,7 +348,7 @@ class MazeSolverNode(Node):
             # IZQUIERDA mientras retrocede (arco, no en linea recta).
             'retroceso_obstaculo_m': 0.05,
             'velocidad_retroceso_obstaculo_mps': 0.06,
-            'velocidad_retroceso_obstaculo_angular_radps': 0.3,
+            'velocidad_retroceso_obstaculo_angular_radps': 0.6,
             # Distancia lateral MINIMA al lado seguido (izquierda): si el LiDAR
             # ve la pared izquierda mas cerca que esto, se corrige alejandose
             # con fuerza para no rozarla (anti-choque lateral, ver
