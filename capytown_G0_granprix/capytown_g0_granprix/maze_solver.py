@@ -279,9 +279,13 @@ class MazeSolverNode(Node):
             # calcular_comando, re-declarada aqui porque este modo NO
             # usa wall_follow_cmd en absoluto.
             'distancia_objetivo_m': 0.12,
-            'ganancia_angulo_recta': 2.0,
-            'ganancia_distancia_recta': 2.0,
-            'angular_max_recta_radps': 0.6,
+            # Correccion lateral mas estricta: mas ganancia en el termino
+            # de distancia (el que corrige que tan pegado va a la pared
+            # seguida) y algo mas en angulo; angular_max sube junto para
+            # que la correccion mas fuerte no se sature de inmediato.
+            'ganancia_angulo_recta': 2.5,
+            'ganancia_distancia_recta': 3.5,
+            'angular_max_recta_radps': 0.7,
             # Confirmacion de N ciclos seguidos con front_narrow
             # bloqueado antes de girar -- un solo vistazo diagonal de un
             # ciclo (100% ruido/transitorio) no alcanza para disparar un

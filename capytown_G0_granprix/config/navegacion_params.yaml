@@ -33,9 +33,10 @@ maze_solver:
     seguir_pared_izquierda: true
     velocidad_recta_mps: 0.15
     distancia_objetivo_m: 0.12
-    ganancia_angulo_recta: 2.0
-    ganancia_distancia_recta: 2.0
-    angular_max_recta_radps: 0.6
+    # Correccion lateral mas estricta (ver comentario en maze_solver.py).
+    ganancia_angulo_recta: 2.5
+    ganancia_distancia_recta: 3.5
+    angular_max_recta_radps: 0.7
     frente_confirmaciones_ciclos: 3
     distancia_chequeo_pared_m: 0.12
     tiempo_chequeo_pared_s: 0.5
