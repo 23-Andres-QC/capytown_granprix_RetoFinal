@@ -42,7 +42,7 @@ maze_solver:
     tiempo_chequeo_pared_s: 0.5
     chequeo_pared_confirmaciones_ciclos: 5
     avance_giro_vacio_m: 0.12
-    giro_vacio_max_repeticiones: 4
+    giro_vacio_max_repeticiones: 2
     angulo_maximo_giro_deg: 150.0
     umbral_frente_pared_m: 0.3
     umbral_frente_libre_m: 0.35

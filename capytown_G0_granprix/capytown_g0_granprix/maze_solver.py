@@ -316,7 +316,7 @@ class MazeSolverNode(Node):
             # de seguridad (evita girar para siempre en un espacio muy
             # abierto). Ver AVANCE_GIRO_VACIO/_handle_avance_giro_vacio.
             'avance_giro_vacio_m': 0.12,
-            'giro_vacio_max_repeticiones': 4,
+            'giro_vacio_max_repeticiones': 2,
             # Giro de logica_dos_reglas: cierra el lazo por odometria
             # contra angulo_giro_deg (90, fijo y exacto -- ver
             # _handle_girar_dinamico). angulo_maximo_giro_deg es tope
