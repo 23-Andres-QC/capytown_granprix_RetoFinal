@@ -314,10 +314,10 @@
     // detiene en la meta (el verde solo marca la celda, no cambia de
     // estado): sigue la pared izquierda hasta cerrar la vuelta completa del
     // laberinto, de regreso a INICIO. Cada vertice es un punto de giro real
-    // del recorrido; se revela vertice a vertice con `tramo` (cuenta giros
-    // GIRAR/AVANCE_GIRO_VACIO -> AVANZAR_PARALELO, ya emitida por
-    // maze_solver via /maze/estado) -- solo se escucha esa señal, no se
-    // recalcula la forma del camino.
+    // del recorrido; se revela vertice a vertice con `giros_fisicos`
+    // (contador de giros de 90 reales, publicado por maze_solver via
+    // /maze/metricas) -- solo se escucha esa señal, no se recalcula la
+    // forma del camino.
     const RUTA_EXPLORACION = [
       [0, 6], [0, 0], [3, 0], [3, 1], [1, 1], [1, 2], [4, 2], [4, 0],
       [11, 0], [11, 5], [8, 5], [8, 3], [6, 3], [6, 1], [5, 1], [5, 3],

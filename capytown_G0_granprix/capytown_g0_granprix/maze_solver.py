@@ -325,7 +325,7 @@ class MazeSolverNode(Node):
             # AVANZAR_PARALELO. giro_vacio_max_repeticiones es el tope
             # de seguridad (evita girar para siempre en un espacio muy
             # abierto). Ver AVANCE_GIRO_VACIO/_handle_avance_giro_vacio.
-            'avance_giro_vacio_m': 0.12,
+            'avance_giro_vacio_m': 0.10,
             'giro_vacio_max_repeticiones': 2,
             # Giro de logica_dos_reglas: cierra el lazo por odometria
             # contra angulo_giro_deg (90, fijo y exacto -- ver
@@ -1403,11 +1403,11 @@ class MazeSolverNode(Node):
 
     def _handle_avance_giro_vacio(self):
         """Tras un giro de 90 de la secuencia de "lado seguido vacio",
-        avanza avance_giro_vacio_m (12cm) en linea recta y RECIEN
+        avanza avance_giro_vacio_m (10cm) en linea recta y RECIEN
         despues verifica de nuevo con distancia PUNTUAL si el lado
         seguido sigue vacio -- si sigue vacio, repite: otro giro de 90
         en la MISMA direccion (self._decision_actual no cambia) mas
-        otro avance de 12cm, hasta giro_vacio_max_repeticiones (tope
+        otro avance de 10cm, hasta giro_vacio_max_repeticiones (tope
         de seguridad, evita girar para siempre en un espacio muy
         abierto). Si ya encuentra pared, retoma AVANZAR_PARALELO."""
         dx = self._odom_x - self._avance_fijo_inicio_xy[0]
