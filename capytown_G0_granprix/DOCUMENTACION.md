@@ -142,47 +142,44 @@ El detector aplica HSV, morfología, área, forma y confirmación temporal.
   frena, no cambia de estado y el carrito continúa con la misma lógica.
 - Los componentes pequeños se eliminan antes de dibujarse.
 
-## Fase 2: ruta más corta (speed-run)
+## Fase 2: ruta rápida (speed-run)
 
-Es una segunda fase ADITIVA que **no altera el mapeo**: mientras el carrito
-sigue la pared izquierda, `maze_solver` graba de forma pasiva el grafo de
-celdas que recorrió (grilla 12×8 cardinal de `motion_ruta.py`, igual que el
-mapa web) y marca la celda donde se confirmó el verde como META. Nada de esto
-cambia una sola decisión de `/cmd_vel` del mapeo. Con `ruta_activa=false` el
-comportamiento es idéntico al mapeo puro.
+Es una segunda fase ADITIVA que **no altera el mapeo**. La ruta ya no se
+calcula por BFS sobre el grafo mapeado: es un guion **FIJO**, conocido de la
+pista (`ruta_fija_giros` + `ruta_fija_distancias_m`), que no depende de haber
+visto el verde durante el mapeo. Con `ruta_activa=false` el comportamiento de
+mapeo es idéntico al mapeo puro (el grafo de celdas se sigue grabando de forma
+pasiva por si se necesita en el futuro, pero ya no alimenta la ruta).
 
-El carrito **NUNCA frena ni parte solo**. El verde solo marca la META en el mapa
-(no frena). La ruta se maneja en **dos comandos**:
+El carrito **NUNCA frena ni parte solo**. La ruta se maneja en **dos comandos**:
 
-- **Calcular** (`/maze/calcular_ruta`): **frena el mapeo y calcula** la ruta más
-  corta inicio→meta con **BFS** sobre las aristas que sí recorrió (nunca cruza
-  una pared y **elimina callejones sin salida y vueltas redundantes**), la
-  publica en `/maze/ruta_corta` para pintarla de **amarillo** y deja el carrito
-  **DETENIDO** (`ESPERA_RUTA`). **Solo funciona si ya vio el verde** (si no, no
-  frena y sigue mapeando). Es la única forma de frenar sin matar el nodo — no
-  uses Ctrl+C, que borraría el mapeo.
+- **Calcular** (`/maze/calcular_ruta`): **frena el mapeo y carga** el guion
+  fijo, lo publica en `/maze/ruta_corta` y deja el carrito **DETENIDO**
+  (`ESPERA_RUTA`). Ya no depende de haber visto el verde antes.
 - **Partir** (`/maze/iniciar_ruta`): **recién con este comando** el carrito
   arranca y entra a `SEGUIR_RUTA`. Es **repetible**: al terminar la ruta vuelve a
-  `ESPERA_RUTA` (detenido, amarillo pintado), así podés colocarlo de nuevo en el
-  inicio y reenviar el comando cuantas veces quieras para probar.
+  `ESPERA_RUTA` (detenido), así podés colocarlo de nuevo en el inicio y
+  reenviar el comando cuantas veces quieras para probar.
 
-Como el punto de partida es siempre el inicio, colocá el carrito ahí mirando
-NORTE (`ruta_asume_rumbo_inicial`) antes de dar el comando de partir.
-
-En `SEGUIR_RUTA` maneja la ruta como un guion de movimientos (giros fijos de 90°
-cerrados por yaw —un 180° se hace como dos de 90°— + avances rectos por
-odometría), **obedeciendo solo la ruta + la anticolisión** (sin seguir pared ni
-ajustar línea). Al agotar el guion pasa a `META`.
+El guion fijo por defecto: avanza 1.10m recto, gira 90° DERECHA, avanza 1.10m,
+gira 90° IZQUIERDA, avanza 0.60m, gira 90° DERECHA y avanza recto **sin límite
+de distancia hasta detectar verde** (el último tramo no tiene distancia fija).
+Durante todo el guion siguen activas la detección de rojo (PARE/FRENO_PARE) y
+verde, y la anticolisión — solo cambia que el carrito ya no sigue pared ni
+ajusta línea, obedece ciegamente giros fijos de 90° (cerrados por yaw) y
+avances rectos por odometría. Colocá el carrito en el inicio mirando NORTE
+antes de partir.
 
 Parámetros (sincronizados con `navegacion_params.yaml`): `ruta_activa`,
-`tamano_celda_m` (0.30, debe coincidir con `CELDA_M` del visualizador),
-`ruta_celda_inicio` (A7), `ruta_heading_inicial`, `ruta_asume_rumbo_inicial`
-(True: el manejo asume que el carrito se recoloca en el inicio mirando NORTE),
+`ruta_fija_giros` (lista de giros relativos, uno por tramo: `NINGUNO` no gira),
+`ruta_fija_distancias_m` (distancia de cada tramo salvo el último, que siempre
+es "hasta detectar verde"), `tamano_celda_m` (0.30, aún usado para discretizar
+el grafo grabado pasivamente), `ruta_celda_inicio` (A7), `ruta_heading_inicial`,
 `verde_topic`, `ruta_topic`, `calcular_ruta_topic`, `iniciar_ruta_topic`.
 
-Riesgo a calibrar en pista: la grilla y el manejo son *open-loop* (odometría),
-así que dependen de `factor_dist_odom`/`factor_ang_odom` y de `tamano_celda_m`;
-la anticolisión evita choques pero no corrige deriva lateral.
+Riesgo a calibrar en pista: el guion es *open-loop* (odometría), así que
+depende de `factor_dist_odom`/`factor_ang_odom`; la anticolisión evita choques
+pero no corrige deriva lateral.
 
 ## Visualizador
 

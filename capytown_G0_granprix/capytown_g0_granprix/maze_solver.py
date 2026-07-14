@@ -59,8 +59,7 @@ from std_msgs.msg import Bool, String
 from capytown_g0_granprix import motion_events as EV
 from capytown_g0_granprix.motion_geometry import angle_diff, normalize_angle, yaw_from_quaternion
 from capytown_g0_granprix.motion_grid import GridTracker
-from capytown_g0_granprix.motion_ruta import (
-    RouteExplorer, bfs_ruta, celdas_a_movimientos)
+from capytown_g0_granprix.motion_ruta import RouteExplorer
 from capytown_g0_granprix.motion_lidar import (
     ZoneWindow, compute_robot_frame_angles, compute_zone_distance, fit_wall_line)
 
@@ -130,13 +129,11 @@ class MazeSolverNode(Node):
             RouteExplorer.from_cell_name(
                 self._ruta_celda_inicio, self._ruta_heading_inicial)
             if self._ruta_activa else None)
-        self._ruta_start_cell = self._explorer.cell if self._explorer else None
         self._verde_anterior = False
         self._meta_cell = None
         self._ruta_last_xy = None            # ancla para contar avances de celda
         self._ruta_dist_acc = 0.0            # distancia recta acumulada sin celda
-        self._ruta_celdas = None             # ruta BFS [(c,r),...]
-        self._ruta_movimientos = None        # guion [{'giro','celdas'}, ...]
+        self._ruta_movimientos = None        # guion [{'giro','distancia_m'}, ...]
         self._ruta_idx = 0
         self._ruta_fase = 'GIRO'             # GIRO|AVANCE dentro de SEGUIR_RUTA
         self._ruta_giro_yaw0 = 0.0
@@ -408,10 +405,10 @@ class MazeSolverNode(Node):
             'factor_dist_odom': 0.9474,
             'factor_ang_odom': 0.9899,
             # ----------------------------------------------------------------
-            # FASE 2 (speed-run): tras mapear siguiendo la pared izquierda y
-            # ver la meta (verde), se calcula la ruta mas corta con BFS sobre
-            # las celdas exploradas y se MANEJA obedeciendo solo la ruta + la
-            # anticolision (sin logica de que lado seguir). El carrito NUNCA
+            # FASE 2 (speed-run): ruta rapida FIJA (guion de tramos conocido
+            # de la pista, ver ruta_fija_giros/ruta_fija_distancias_m) que se
+            # MANEJA obedeciendo solo la ruta + la anticolision (sin logica
+            # de que lado seguir). El carrito NUNCA
             # parte solo: hay dos comandos (calcular y partir, abajo). Todo es
             # ADITIVO: no altera ninguna decision del mapeo. Con
             # ruta_activa=false el comportamiento es identico al mapeo puro.
@@ -433,12 +430,14 @@ class MazeSolverNode(Node):
             # inicio del carrito; coincide con INICIO_POS del visualizador).
             'ruta_celda_inicio': 'A7',
             'ruta_heading_inicial': 'NORTE',
-            # El punto de partida es SIEMPRE el mismo (inicio). Con esto en True,
-            # el guion de manejo se arma asumiendo que el carrito estara en el
-            # INICIO mirando ruta_heading_inicial (NORTE) -- pensado para que lo
-            # coloques ahi antes de dar el comando de partir. En False usa el
-            # rumbo interno de odometria (solo si NO recolocas el carrito).
-            'ruta_asume_rumbo_inicial': True,
+            # Ruta rapida FIJA (fase 2): guion de tramos fijo, ya conocido de
+            # la pista, en vez de calcularlo por BFS sobre el grafo mapeado.
+            # ruta_fija_giros tiene un giro por tramo (relativo: NINGUNO gira
+            # nada); ruta_fija_distancias_m tiene la distancia de cada tramo
+            # EXCEPTO el ultimo, que siempre avanza recto hasta detectar
+            # verde (por eso hay un giro mas que distancias).
+            'ruta_fija_giros': ['NINGUNO', 'DERECHA', 'IZQUIERDA', 'DERECHA'],
+            'ruta_fija_distancias_m': [1.10, 1.10, 0.60],
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -545,7 +544,8 @@ class MazeSolverNode(Node):
         self._tamano_celda = float(g('tamano_celda_m'))
         self._ruta_celda_inicio = str(g('ruta_celda_inicio'))
         self._ruta_heading_inicial = str(g('ruta_heading_inicial'))
-        self._ruta_asume_rumbo_inicial = bool(g('ruta_asume_rumbo_inicial'))
+        self._ruta_fija_giros = list(g('ruta_fija_giros'))
+        self._ruta_fija_distancias = [float(d) for d in g('ruta_fija_distancias_m')]
 
     # ------------------------------------------------------------------
     # Callbacks de suscripcion
@@ -1470,7 +1470,7 @@ class MazeSolverNode(Node):
         self._set_state('AVANZAR_PARALELO')
 
     # ------------------------------------------------------------------
-    # FASE 2: ruta corta (BFS) + freno + manejo por guion de movimientos
+    # FASE 2: ruta rapida FIJA + freno + manejo por guion de movimientos
     # ------------------------------------------------------------------
     def _registrar_avance_ruta(self):
         """Discretiza el avance recto del MAPEO en celdas y graba el grafo.
@@ -1502,41 +1502,30 @@ class MazeSolverNode(Node):
             self._explorer.avanzar()
 
     def _calcular_ruta(self) -> bool:
-        """Calcula la ruta corta (BFS) y la publica (amarillo). NO mueve el
-        carrito ni cambia de estado. Devuelve True si obtuvo una ruta valida."""
-        if self._meta_cell is None:
-            self._publish_event(
-                EV.TIMEOUT, 'sin ruta: aun no se vio la meta (verde)')
-            return False
-        ruta = bfs_ruta(self._ruta_start_cell, self._meta_cell,
-                        self._explorer.aristas)
-        if not ruta or len(ruta) < 2:
-            self._publish_event(
-                EV.TIMEOUT, f'sin ruta valida a la meta {self._meta_cell}')
-            return False
-        self._ruta_celdas = ruta
-        # Rumbo de arranque del guion. Por defecto (ruta_asume_rumbo_inicial=
-        # True) se asume que el carrito estara en el INICIO mirando
-        # ruta_heading_inicial (NORTE) -- el punto de partida es siempre el
-        # mismo. Si es False, se usa el rumbo interno de odometria.
-        rumbo_arranque = (self._ruta_heading_inicial
-                          if self._ruta_asume_rumbo_inicial
-                          else self._explorer.heading)
-        self._ruta_movimientos = celdas_a_movimientos(ruta, rumbo_arranque)
+        """Carga la ruta rapida FIJA: un guion de tramos fijo y conocido de
+        la pista (ruta_fija_giros/ruta_fija_distancias_m), en vez de
+        calcularlo por BFS sobre el grafo mapeado. El ultimo tramo siempre
+        avanza recto hasta detectar verde (distancia_m=None). NO mueve el
+        carrito ni cambia de estado. Devuelve True (la ruta fija siempre
+        esta disponible, no depende de haber visto el verde antes)."""
+        self._ruta_movimientos = [
+            {
+                'giro': giro,
+                'distancia_m': (self._ruta_fija_distancias[i]
+                                if i < len(self._ruta_fija_distancias) else None),
+            }
+            for i, giro in enumerate(self._ruta_fija_giros)
+        ]
         self._ruta_idx = 0
         self._ruta_fase = 'GIRO'
         self._ruta_giro_restante = None
         self._publicar_ruta()
         self._publish_event(
-            EV.META, f'ruta corta calculada: {len(ruta)} celdas')
+            EV.META, f'ruta FIJA cargada: {len(self._ruta_movimientos)} tramos')
         return True
 
     def _publicar_ruta(self):
-        self._ruta_json = json.dumps({
-            'listo': True,
-            'celdas': [[int(c), int(r)] for (c, r) in self._ruta_celdas],
-            'meta': [int(self._meta_cell[0]), int(self._meta_cell[1])],
-        })
+        self._ruta_json = json.dumps({'listo': True, 'fija': True})
         self._ruta_pub.publish(String(data=self._ruta_json))
 
     def _republicar_ruta(self):
@@ -1560,9 +1549,10 @@ class MazeSolverNode(Node):
         """Maneja la ruta corta obedeciendo SOLO el guion de movimientos.
 
         No sigue pared ni ajusta linea: gira lo que dice la ruta (giro fijo
-        de 90/180 cerrado por yaw) y avanza en recto las celdas indicadas
-        (cerrado por odometria). La anticolision es la unica capa reactiva y
-        ya corre global en _on_timer antes de este handler.
+        de 90/180 cerrado por yaw) y avanza en recto la distancia indicada
+        (cerrado por odometria; el ultimo tramo no tiene distancia fija,
+        avanza hasta detectar verde). La anticolision es la unica capa
+        reactiva y ya corre global en _on_timer antes de este handler.
         """
         self._republicar_ruta()
         if (self._ruta_movimientos is None
@@ -1580,7 +1570,7 @@ class MazeSolverNode(Node):
         if self._ruta_fase == 'GIRO':
             self._ejecutar_giro_ruta(mov['giro'])
         else:
-            self._ejecutar_avance_ruta(mov['celdas'])
+            self._ejecutar_avance_ruta(mov['distancia_m'])
 
     def _iniciar_avance_ruta(self):
         self._ruta_fase = 'AVANCE'
@@ -1614,11 +1604,25 @@ class MazeSolverNode(Node):
         cmd.angular.z = self._v_giro_angular if izquierda else -self._v_giro_angular
         self._publish_twist(cmd)
 
-    def _ejecutar_avance_ruta(self, celdas: int):
+    def _ejecutar_avance_ruta(self, distancia_m):
+        """Avanza recto ``distancia_m`` (por odometria). Si es ``None``,
+        avanza recto SIN limite de distancia hasta detectar verde (tramo
+        final de la ruta fija)."""
+        if distancia_m is None:
+            if self._verde_anterior:
+                self._publish_twist(Twist())
+                self._ruta_idx += 1
+                self._ruta_fase = 'GIRO'
+                self._ruta_giro_restante = None
+                return
+            cmd = Twist()
+            cmd.linear.x = self._velocidad_recta
+            self._publish_twist(cmd)
+            return
+
         dx = self._odom_x - self._ruta_avance_xy0[0]
         dy = self._odom_y - self._ruta_avance_xy0[1]
-        objetivo = celdas * self._tamano_celda
-        if math.hypot(dx, dy) >= objetivo:
+        if math.hypot(dx, dy) >= distancia_m:
             self._publish_twist(Twist())
             self._ruta_idx += 1
             self._ruta_fase = 'GIRO'
