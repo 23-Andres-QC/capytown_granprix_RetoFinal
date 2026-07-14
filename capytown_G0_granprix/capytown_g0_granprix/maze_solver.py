@@ -109,6 +109,7 @@ class MazeSolverNode(Node):
 
         self._esperando_obstaculo = False
         self._espera_obstaculo_inicio = None
+        self._contador_frente_colision = 0
         self._retrocediendo_obstaculo = False
         self._retroceso_obstaculo_xy0 = (0.0, 0.0)
         self._avanzando_post_retroceso = False
@@ -788,7 +789,13 @@ class MazeSolverNode(Node):
     def _handle_obstaculo_frente(self) -> bool:
         """Regla general de seguridad, activa en cualquier estado.
 
-        Si hay un objeto al frente mas cerca que ``umbral_colision_m``:
+        Si hay un objeto al frente mas cerca que ``umbral_colision_m``
+        sostenido ``frente_confirmaciones_ciclos`` ciclos seguidos (mismo
+        filtro anti-ruido que la regla 4 del mapeo; sin esto, un solo frame
+        del LiDAR viendo una pared cercana MIENTRAS GIRA -- normal y
+        esperable en un pasillo angosto, no un choque real -- disparaba
+        todo el retroceso de inmediato, interrumpiendo giros/tramos de la
+        ruta fija con un giro que no pedia el guion):
         1. Retrocede ``retroceso_obstaculo_m`` (en arco) para despegarse.
         2. Avanza ``avance_post_retroceso_m`` RECTO.
         3. Recien ahi analiza el entorno: espera ``tiempo_espera_obstaculo_s``
@@ -863,7 +870,10 @@ class MazeSolverNode(Node):
             self._esperando_obstaculo = False
             return False
 
-        if frente_bloqueado:
+        self._contador_frente_colision = (
+            self._contador_frente_colision + 1 if frente_bloqueado else 0)
+        if self._contador_frente_colision >= self._frente_confirmaciones_ciclos:
+            self._contador_frente_colision = 0
             d_frente = z.front if z.front_valid else z.front_narrow
             self._contador_colisiones += 1
             self._publish_event(
@@ -874,6 +884,7 @@ class MazeSolverNode(Node):
             self._retrocediendo_obstaculo = True
             self._retroceso_obstaculo_xy0 = (self._odom_x, self._odom_y)
             return True
+        return False
 
     def _monitor_rotacion(self):
         """Anti-vuelta-completa: acumula el giro y, si supera 360 grados sin
