@@ -12,6 +12,9 @@ maze_solver:
     right_window_deg: [-110.0, -70.0]
     right_rear_window_deg: [-135.0, -105.0]
     left_window_deg: [70.0, 110.0]
+    # Cono diagonal-adelante del lado izquierdo (espejo de right_front),
+    # usado por la regla 0 de deteccion temprana del vacio.
+    left_front_window_deg: [45.0, 75.0]
     right_side_window_deg: [-110.0, -70.0]
     left_side_window_deg: [70.0, 110.0]
     min_puntos_linea: 6

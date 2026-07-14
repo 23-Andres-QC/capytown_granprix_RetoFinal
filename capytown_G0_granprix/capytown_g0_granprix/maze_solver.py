@@ -231,6 +231,11 @@ class MazeSolverNode(Node):
             'right_window_deg': [-110.0, -70.0],
             'right_rear_window_deg': [-135.0, -105.0],
             'left_window_deg': [70.0, 110.0],
+            # Cono diagonal-adelante del lado izquierdo (espejo de
+            # right_front_window_deg): detecta que el lado seguido se abre
+            # ANTES de que el costado del robot llegue al hueco (regla 0 de
+            # deteccion temprana en _handle_avanzar_paralelo_dos_reglas).
+            'left_front_window_deg': [45.0, 75.0],
             'right_side_window_deg': [-110.0, -70.0],
             'left_side_window_deg': [70.0, 110.0],
             'min_puntos_linea': 6,
@@ -461,6 +466,7 @@ class MazeSolverNode(Node):
             'right': ZoneWindow(*g('right_window_deg')),
             'right_rear': ZoneWindow(*g('right_rear_window_deg')),
             'left': ZoneWindow(*g('left_window_deg')),
+            'left_front': ZoneWindow(*g('left_front_window_deg')),
         }
         self._right_side_window = ZoneWindow(*g('right_side_window_deg'))
         self._left_side_window = ZoneWindow(*g('left_side_window_deg'))
@@ -562,7 +568,8 @@ class MazeSolverNode(Node):
             self._front_offset_rad, self._lidar_sign)
         max_use = min(float(msg.range_max), self._max_range_use)
         z = SimpleNamespace()
-        for name in ('front', 'front_narrow', 'right_front', 'right', 'right_rear', 'left'):
+        for name in ('front', 'front_narrow', 'right_front', 'right', 'right_rear',
+                     'left', 'left_front'):
             distance, valid = compute_zone_distance(
                 ranges, angles, msg.range_min, max_use, self._lidar_windows[name])
             setattr(z, name, distance)
@@ -944,6 +951,15 @@ class MazeSolverNode(Node):
     def _lado_distancia(self, z) -> float:
         return z.left if self._seguir_izquierda else z.right
 
+    def _lado_frente_valid(self, z) -> bool:
+        """Cono diagonal-adelante del lado seguido (left_front/right_front):
+        detecta que el lado se abre ANTES que el cono lateral puro (regla 0,
+        deteccion temprana del hueco)."""
+        return bool(z.left_front_valid if self._seguir_izquierda else z.right_front_valid)
+
+    def _lado_frente_distancia(self, z) -> float:
+        return z.left_front if self._seguir_izquierda else z.right_front
+
     def _twist_wall_follow(self) -> Twist:
         """Twist de avance recto con correccion lateral Kp hacia la pared
         seguida (mismo ajuste de linea del mapeo). Reutilizado por
@@ -1093,18 +1109,21 @@ class MazeSolverNode(Node):
         de estas reglas y nunca modifica el estado ni el comando de velocidad.
 
         Regla 0 (deteccion TEMPRANA del vacio, EN MOVIMIENTO): no espera a
-        completar distancia_chequeo_pared_m -- si el lado seguido aparece
-        libre sostenido chequeo_pared_confirmaciones_ciclos ciclos seguidos
-        mientras avanza, gira de inmediato (mismo criterio y misma
-        confirmacion por varios ciclos que el chequeo puntual detenido de
-        la regla 3, solo que evaluado sin parar). Se prioriza sobre las
-        reglas 1-4: encontrar el hueco antes evita pasarlo de largo
-        esperando el proximo chequeo periodico.
+        completar distancia_chequeo_pared_m -- usa el cono DIAGONAL-ADELANTE
+        del lado seguido (left_front/right_front, no el lateral puro): ese
+        rayo deja de ver la pared ANTES de que el costado del robot llegue
+        al hueco, dando mas distancia real de reaccion (no solo menos
+        ciclos de espera). Si aparece libre sostenido
+        chequeo_pared_confirmaciones_ciclos ciclos seguidos mientras avanza,
+        gira de inmediato. Se prioriza sobre las reglas 1-4: encontrar el
+        hueco antes evita pasarlo de largo esperando el proximo chequeo
+        periodico.
         """
         z = self._zones
 
         lado_libre_temprano = bool(
-            self._lado_valid(z) and self._lado_distancia(z) > self._umbral_lado_libre)
+            self._lado_frente_valid(z)
+            and self._lado_frente_distancia(z) > self._umbral_lado_libre)
         self._contador_lado_libre_temprano = (
             self._contador_lado_libre_temprano + 1 if lado_libre_temprano else 0)
         if self._contador_lado_libre_temprano >= self._chequeo_pared_confirmaciones_ciclos:
@@ -1117,7 +1136,8 @@ class MazeSolverNode(Node):
             self._contador_giros_fisicos += 1
             self._publish_event(
                 EV.GIRO,
-                f'lado seguido vacio en movimiento ({self._lado_distancia(z):.2f}m) '
+                f'lado seguido vacio en movimiento '
+                f'({self._lado_frente_distancia(z):.2f}m diagonal) '
                 f'-> {self._decision_actual}'
             )
             self._set_state('GIRAR')
