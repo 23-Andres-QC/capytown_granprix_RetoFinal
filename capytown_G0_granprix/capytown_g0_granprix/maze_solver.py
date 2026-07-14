@@ -112,6 +112,8 @@ class MazeSolverNode(Node):
         self._espera_obstaculo_inicio = None
         self._retrocediendo_obstaculo = False
         self._retroceso_obstaculo_xy0 = (0.0, 0.0)
+        self._avanzando_post_retroceso = False
+        self._avance_post_retroceso_xy0 = (0.0, 0.0)
         self._contador_frente_dos_reglas = 0
         self._yaw_inicio_giro = 0.0
         self._imu_acum_giro = 0.0
@@ -349,6 +351,10 @@ class MazeSolverNode(Node):
             'retroceso_obstaculo_m': 0.10,
             'velocidad_retroceso_obstaculo_mps': 0.06,
             'velocidad_retroceso_obstaculo_angular_radps': 0.9,
+            # Al terminar el retroceso, avanza esta distancia RECTO antes de
+            # pasar al chequeo normal (analiza de nuevo el entorno recien
+            # despues de este avance).
+            'avance_post_retroceso_m': 0.10,
             # Distancia lateral MINIMA al lado seguido (izquierda): si el LiDAR
             # ve la pared izquierda mas cerca que esto, se corrige alejandose
             # con fuerza para no rozarla (anti-choque lateral, ver
@@ -496,6 +502,7 @@ class MazeSolverNode(Node):
         self._retroceso_obstaculo = float(g('retroceso_obstaculo_m'))
         self._v_retroceso_obstaculo = float(g('velocidad_retroceso_obstaculo_mps'))
         self._w_retroceso_obstaculo = float(g('velocidad_retroceso_obstaculo_angular_radps'))
+        self._avance_post_retroceso = float(g('avance_post_retroceso_m'))
         self._umbral_lateral_min = float(g('umbral_lateral_min_m'))
         self._correccion_giro_360 = bool(g('correccion_giro_360'))
         self._correccion_giro_rad = math.radians(float(g('correccion_giro_grados')))
@@ -769,12 +776,14 @@ class MazeSolverNode(Node):
     def _handle_obstaculo_frente(self) -> bool:
         """Regla general de seguridad, activa en cualquier estado.
 
-        Si hay un objeto al frente mas cerca que ``umbral_colision_m``,
-        retrocede ``retroceso_obstaculo_m`` para despegarse de el y luego
-        espera ``tiempo_espera_obstaculo_s``, comprobando si ya esta libre;
-        si sigue bloqueado, reinicia la espera (queda preguntando en bucle
-        hasta que se libere). Retorna True si este ciclo ya publico un
-        comando (el llamador debe omitir el despacho normal de estados).
+        Si hay un objeto al frente mas cerca que ``umbral_colision_m``:
+        1. Retrocede ``retroceso_obstaculo_m`` (en arco) para despegarse.
+        2. Avanza ``avance_post_retroceso_m`` RECTO.
+        3. Recien ahi analiza el entorno: espera ``tiempo_espera_obstaculo_s``
+           comprobando si el frente ya esta libre; si sigue bloqueado,
+           reinicia la espera (queda preguntando en bucle hasta liberarse).
+        Retorna True si este ciclo ya publico un comando (el llamador debe
+        omitir el despacho normal de estados).
         """
         if self._terminado:
             return False
@@ -793,8 +802,8 @@ class MazeSolverNode(Node):
             if math.hypot(dx, dy) >= self._retroceso_obstaculo:
                 self._publish_twist(Twist())
                 self._retrocediendo_obstaculo = False
-                self._esperando_obstaculo = True
-                self._espera_obstaculo_inicio = self.get_clock().now()
+                self._avanzando_post_retroceso = True
+                self._avance_post_retroceso_xy0 = (self._odom_x, self._odom_y)
                 self._publish_event(
                     EV.COLISION,
                     f'retroceso de {self._retroceso_obstaculo * 100:.0f}cm completado'
@@ -806,6 +815,25 @@ class MazeSolverNode(Node):
             # mismo convenio que 'DERECHA' en _handle_girar/
             # _ejecutar_giro_ruta), no en linea recta.
             cmd.angular.z = -self._w_retroceso_obstaculo
+            self._publish_twist(cmd)
+            return True
+
+        if self._avanzando_post_retroceso:
+            dx = self._odom_x - self._avance_post_retroceso_xy0[0]
+            dy = self._odom_y - self._avance_post_retroceso_xy0[1]
+            if math.hypot(dx, dy) >= self._avance_post_retroceso:
+                self._publish_twist(Twist())
+                self._avanzando_post_retroceso = False
+                self._esperando_obstaculo = True
+                self._espera_obstaculo_inicio = self.get_clock().now()
+                self._publish_event(
+                    EV.COLISION,
+                    f'avance de {self._avance_post_retroceso * 100:.0f}cm '
+                    f'post-retroceso completado; analizando entorno'
+                )
+                return True
+            cmd = Twist()
+            cmd.linear.x = self._velocidad_recta
             self._publish_twist(cmd)
             return True
 

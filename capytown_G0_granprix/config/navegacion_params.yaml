@@ -56,6 +56,8 @@ maze_solver:
     retroceso_obstaculo_m: 0.10
     velocidad_retroceso_obstaculo_mps: 0.06
     velocidad_retroceso_obstaculo_angular_radps: 0.9
+    # Tras el retroceso, avanza esto RECTO antes de analizar el entorno de nuevo.
+    avance_post_retroceso_m: 0.10
     umbral_lateral_min_m: 0.07
     correccion_giro_360: true
     correccion_giro_grados: 10.0
