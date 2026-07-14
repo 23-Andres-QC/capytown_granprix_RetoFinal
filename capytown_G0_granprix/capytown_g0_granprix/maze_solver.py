@@ -110,6 +110,8 @@ class MazeSolverNode(Node):
 
         self._esperando_obstaculo = False
         self._espera_obstaculo_inicio = None
+        self._retrocediendo_obstaculo = False
+        self._retroceso_obstaculo_xy0 = (0.0, 0.0)
         self._contador_frente_dos_reglas = 0
         self._yaw_inicio_giro = 0.0
         self._pausa_chequeo_start = None
@@ -307,6 +309,11 @@ class MazeSolverNode(Node):
             # subio de 0.10 a 0.15 para frenar antes y evitar choques (el
             # chasis Ackermann tiene inercia y el cono ancho promedia).
             'umbral_colision_m': 0.15,
+            # Al bloquearse por obstaculo frontal, retrocede esta distancia
+            # (odometria) antes de quedar esperando -- despega del objeto en
+            # vez de solo detenerse en seco.
+            'retroceso_obstaculo_m': 0.03,
+            'velocidad_retroceso_obstaculo_mps': 0.06,
             # Distancia lateral MINIMA al lado seguido (izquierda): si el LiDAR
             # ve la pared izquierda mas cerca que esto, se corrige alejandose
             # con fuerza para no rozarla (anti-choque lateral, ver
@@ -449,6 +456,8 @@ class MazeSolverNode(Node):
         self._umbral_frente_libre = float(g('umbral_frente_libre_m'))
         self._umbral_lado_libre = float(g('umbral_lado_libre_m'))
         self._umbral_colision = float(g('umbral_colision_m'))
+        self._retroceso_obstaculo = float(g('retroceso_obstaculo_m'))
+        self._v_retroceso_obstaculo = float(g('velocidad_retroceso_obstaculo_mps'))
         self._umbral_lateral_min = float(g('umbral_lateral_min_m'))
         self._correccion_giro_360 = bool(g('correccion_giro_360'))
         self._correccion_giro_rad = math.radians(float(g('correccion_giro_grados')))
@@ -687,11 +696,11 @@ class MazeSolverNode(Node):
         """Regla general de seguridad, activa en cualquier estado.
 
         Si hay un objeto al frente mas cerca que ``umbral_colision_m``,
-        detiene el robot de inmediato, espera ``tiempo_espera_obstaculo_s``
-        y vuelve a comprobar si ya esta libre; si sigue bloqueado,
-        reinicia la espera (queda preguntando en bucle hasta que se
-        libere). Retorna True si este ciclo ya publico un comando (el
-        llamador debe omitir el despacho normal de estados).
+        retrocede ``retroceso_obstaculo_m`` para despegarse de el y luego
+        espera ``tiempo_espera_obstaculo_s``, comprobando si ya esta libre;
+        si sigue bloqueado, reinicia la espera (queda preguntando en bucle
+        hasta que se libere). Retorna True si este ciclo ya publico un
+        comando (el llamador debe omitir el despacho normal de estados).
         """
         if self._terminado:
             return False
@@ -703,6 +712,24 @@ class MazeSolverNode(Node):
         frente_bloqueado = (
             (z.front_valid and z.front < self._umbral_colision) or
             (z.front_narrow_valid and z.front_narrow < self._umbral_colision))
+
+        if self._retrocediendo_obstaculo:
+            dx = self._odom_x - self._retroceso_obstaculo_xy0[0]
+            dy = self._odom_y - self._retroceso_obstaculo_xy0[1]
+            if math.hypot(dx, dy) >= self._retroceso_obstaculo:
+                self._publish_twist(Twist())
+                self._retrocediendo_obstaculo = False
+                self._esperando_obstaculo = True
+                self._espera_obstaculo_inicio = self.get_clock().now()
+                self._publish_event(
+                    EV.COLISION,
+                    f'retroceso de {self._retroceso_obstaculo * 100:.0f}cm completado'
+                )
+                return True
+            cmd = Twist()
+            cmd.linear.x = -self._v_retroceso_obstaculo
+            self._publish_twist(cmd)
+            return True
 
         if self._esperando_obstaculo:
             if frente_bloqueado:
@@ -719,13 +746,14 @@ class MazeSolverNode(Node):
             return False
 
         if frente_bloqueado:
-            self._publish_twist(Twist())
             d_frente = z.front if z.front_valid else z.front_narrow
             self._publish_event(
-                EV.COLISION, f'obstaculo a {d_frente:.2f} m cerca de {self._grid.cell}'
+                EV.COLISION,
+                f'obstaculo a {d_frente:.2f} m cerca de {self._grid.cell}; '
+                f'retrocediendo {self._retroceso_obstaculo * 100:.0f}cm'
             )
-            self._esperando_obstaculo = True
-            self._espera_obstaculo_inicio = self.get_clock().now()
+            self._retrocediendo_obstaculo = True
+            self._retroceso_obstaculo_xy0 = (self._odom_x, self._odom_y)
             return True
 
     def _monitor_rotacion(self):
