@@ -14,20 +14,13 @@ connectedComponentsWithStats. Cambios respecto al RC:
     ALARGADAS (elongación alta); un cartel PARE es un blob COMPACTO
     (relación de aspecto ~1, solidez alta). Un reflejo rojo alargado o
     un cable rojo NO pasan el filtro.
-  · Zona de atención (fusión por contexto): maze_solver publica
-    /maze/atencion_pare=True cuando el LiDAR indica que se aproxima una
-    intersección. Fuera de la zona de atención se exige un área mínima
-    mayor (factor_area_sin_atencion) — el rojo lejano/espurio de mitad
-    de pasillo no dispara nada.
-  · Banda central: el PARE solo cuenta si su centro cae en la BANDA
-    CENTRAL horizontal del frame (centro_tol_frac). Un cartel a un lado
-    (que el robot no está mirando de frente) se ignora.
+  · El rojo se acepta en cualquier posición de la imagen. La banda central
+    (centro_tol_frac) se conserva únicamente para el detector amarillo.
 
 Tópicos:
     sub  /image_raw            (sensor_msgs/Image)
-    sub  /maze/atencion_pare   (std_msgs/Bool)
-    pub  /pare_detectado       (std_msgs/Bool)   — ROJO (PARE) confirmado, centrado
-    pub  /verde_detectado      (std_msgs/Bool)   — VERDE opaco confirmado, centrado
+    pub  /pare_detectado       (std_msgs/Bool)   — ROJO (PARE) confirmado
+    pub  /verde_detectado      (std_msgs/Bool)   — VERDE opaco confirmado
     pub  /amarillo_detectado   (std_msgs/Bool)   — AMARILLO confirmado
     pub  /beep                 (std_msgs/UInt16) — un pitido ("pi") al ver rojo/amarillo
     pub  /pare/area            (std_msgs/Float32) — área del blob rojo (debug/tuning)
@@ -51,10 +44,10 @@ class PareDetector(Node):
 
         self.declare_parameters('', [
             # Rojo en HSV — DOS rangos porque el hue del rojo cruza 0/179
-            ('rojo_h_bajo_max',   15),
-            ('rojo_h_alto_min',  165),
-            ('rojo_s_min',        80),
-            ('rojo_v_min',        50),
+            ('rojo_h_bajo_max',   10),
+            ('rojo_h_alto_min',  170),
+            ('rojo_s_min',       100),
+            ('rojo_v_min',        70),
             # Amarillo: rango HSV separado del verde y del rojo.
             ('amarillo_h_min',    20),
             ('amarillo_h_max',    35),
@@ -77,7 +70,7 @@ class PareDetector(Node):
             ('verde_area_max',  150000),
             ('verde_solidez_min', 0.35),
             # Forma del cartel (blob compacto, no cinta)
-            ('area_min',         200),
+            ('area_min',         600),
             ('area_max',       60000),
             ('aspecto_min',      0.5),   # w/h del bounding box
             ('aspecto_max',      2.0),
@@ -91,8 +84,6 @@ class PareDetector(Node):
             # Solo se acepta el PARE si su centro está en la BANDA CENTRAL
             # horizontal: |cx_blob - cx_img| <= centro_tol_frac * ancho.
             ('centro_tol_frac',  0.20),  # 0.20 → banda central del 40% del ancho
-            # Fusión por contexto (zona de atención del maze_solver)
-            ('factor_area_sin_atencion', 2.5),
             ('frames_confirmacion', 3),  # frames seguidos para rechazar destellos
             # Tiempo minimo entre pitidos: un solo frame que pierda el color
             # (ruido/reflejo) resetea el contador de confirmacion y, al
@@ -132,13 +123,11 @@ class PareDetector(Node):
         self.franja_inferior = float(gp('franja_inferior'))
         self.franja_verde = float(gp('franja_verde'))
         self.centro_tol_frac = float(gp('centro_tol_frac'))
-        self.factor_sin_atencion = float(gp('factor_area_sin_atencion'))
         self.frames_confirmacion = int(gp('frames_confirmacion'))
         self.beep_cooldown_s = float(gp('beep_cooldown_s'))
         self.publish_debug = bool(gp('publish_debug'))
         self.topic_camera = str(gp('topic_camera'))
 
-        self.atencion = False
         self.frames_seguidos = 0
         self.frames_seguidos_verde = 0
         self.frames_seguidos_amarillo = 0
@@ -147,7 +136,6 @@ class PareDetector(Node):
         self._ultimo_beep = None
 
         self.create_subscription(Image, self.topic_camera, self.on_image, 10)
-        self.create_subscription(Bool, '/maze/atencion_pare', self.on_atencion, 10)
         self.pub_pare = self.create_publisher(Bool, '/pare_detectado', 10)
         self.pub_verde = self.create_publisher(Bool, '/verde_detectado', 10)
         self.pub_amarillo = self.create_publisher(Bool, '/amarillo_detectado', 10)
@@ -159,9 +147,6 @@ class PareDetector(Node):
             f'pare_detector listo en {self.topic_camera} | '
             f'rojo H<= {self.h_bajo} o H>={self.h_alto}, '
             f'S>={self.s_min}, V>={self.v_min} | area>={self.area_min}')
-
-    def on_atencion(self, msg: Bool):
-        self.atencion = msg.data
 
     # ------------------------------------------------------------------
     def on_image(self, msg: Image):
@@ -175,14 +160,11 @@ class PareDetector(Node):
         # ROJO y AMARILLO: toda la cámara (franja_inferior=1.0).
         hsv = cv2.cvtColor(frame[:int(self.franja_inferior * h), :],
                            cv2.COLOR_BGR2HSV)
-        # VERDE (meta): SOLO la banda de arriba (franja_verde=1/3).
+        # VERDE (meta): SOLO los 2/3 superiores (franja_verde=0.6667).
         hsv_verde = cv2.cvtColor(frame[:max(1, int(self.franja_verde * h)), :],
                                  cv2.COLOR_BGR2HSV)
 
-        # área mínima según contexto: fuera de la zona de atención se exige
-        # un cartel más grande (más cerca) para aceptarlo
-        area_min = self.area_min if self.atencion \
-            else self.area_min * self.factor_sin_atencion
+        area_min = self.area_min
 
         # ROJO (PARE): en TODA la cámara y en CUALQUIER posición (no exige
         # que el cartel esté centrado -> exigir_centro=False).
@@ -297,11 +279,10 @@ class PareDetector(Node):
     def _validar_forma(self, mask, area_min, aspecto_min=None,
                        aspecto_max=None, area_max=None, solidez_min=None,
                        exigir_centro=True):
-        """Valida que el blob rojo tenga forma de CARTEL: compacto
+        """Valida que un blob tenga forma de cartel compacto
         (aspecto ~1) y sólido (sin huecos grandes) — un reflejo alargado
-        o ruido disperso no pasa. Además solo lo acepta si está en la BANDA
-        CENTRAL horizontal de la imagen (si el PARE no está al centro, no
-        cuenta). Es la validación por contorno que pide el enunciado."""
+        o ruido disperso no pasa. Si ``exigir_centro`` está activo, también
+        exige que el blob esté en la banda central horizontal."""
         aspecto_min = self.aspecto_min if aspecto_min is None else aspecto_min
         aspecto_max = self.aspecto_max if aspecto_max is None else aspecto_max
         area_max = self.area_max if area_max is None else area_max
@@ -365,7 +346,7 @@ class PareDetector(Node):
             etq.append('VERDE!')
         if conf_a:
             etq.append('AMARILLO!')
-        estado = ' '.join(etq) if etq else ('atencion' if self.atencion else '-')
+        estado = ' '.join(etq) if etq else '-'
         cv2.putText(dbg, estado, (5, 22), cv2.FONT_HERSHEY_SIMPLEX,
                     0.7, (0, 255, 0), 2)
         out = self.bridge.cv2_to_imgmsg(dbg, 'bgr8')

@@ -37,7 +37,8 @@ pare_detector:
     franja_inferior: 1.0
     franja_verde: 0.6667
 
-    factor_area_sin_atencion: 2.5
+    # Banda central usada por la detección amarilla.
+    centro_tol_frac: 0.20
     frames_confirmacion: 3
     # Tiempo minimo entre pitidos (evita repetirlo por parpadeo de la camara).
     beep_cooldown_s: 5.0

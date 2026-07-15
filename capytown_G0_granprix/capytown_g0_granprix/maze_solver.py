@@ -4,9 +4,8 @@
 Es el UNICO nodo que escribe en ``/cmd_vel``: centraliza toda decision
 de movimiento para evitar que dos publicadores manden comandos
 contradictorios al mismo tiempo. Mientras el estado es
-AVANZAR_PARALELO, reenvia la sugerencia de ``wall_follower_node``
-(``/wall_follow/cmd_vel_suggestion``); en el resto de estados calcula
-sus propios comandos (girar detenido-lento, alinear, detener).
+AVANZAR_PARALELO, calcula la correccion de pared con el LiDAR; en el resto de
+estados calcula sus propios comandos (girar detenido-lento, alinear, detener).
 
 Maquina de estados (ver logica_pared_derecha_robot.md y
 DETALLE RETO 3.md):
@@ -89,7 +88,6 @@ class MazeSolverNode(Node):
         self._pare_pendiente = False
         self._pare_ignorar_xy = None
         self._freno_pare_start = None
-        self._wall_follow_cmd = Twist()
 
         # Variables de trabajo por estado
         self._cell_start_xy = (0.0, 0.0)
@@ -127,14 +125,8 @@ class MazeSolverNode(Node):
         self._avance_fijo_inicio_xy = (0.0, 0.0)
 
         # --- FASE 2 (ruta corta / speed-run), todo aditivo ---
-        self._explorer = (
-            RouteExplorer.from_cell_name(
-                self._ruta_celda_inicio, self._ruta_heading_inicial)
-            if self._ruta_activa else None)
         self._verde_anterior = False
-        self._meta_cell = None
-        self._ruta_last_xy = None            # ancla para contar avances de celda
-        self._ruta_dist_acc = 0.0            # distancia recta acumulada sin celda
+        self._meta_detectada = False
         self._ruta_movimientos = None        # guion [{'giro','distancia_m'}, ...]
         self._ruta_idx = 0
         self._ruta_fase = 'GIRO'             # GIRO|AVANCE dentro de SEGUIR_RUTA
@@ -244,7 +236,6 @@ class MazeSolverNode(Node):
             'left_wall_max_range_m': 0.50,
             'outlier_max_iter': 3,
             'outlier_residuo_m': 0.03,
-            'lidar_zones_topic': '/lidar_zones',
             'odom_topic': '/odom_raw',
             # Deteccion de patinaje en giros: compara cuanto giro segun la
             # odometria de rueda vs. cuanto giro segun el giroscopio del IMU
@@ -253,7 +244,6 @@ class MazeSolverNode(Node):
             'imu_topic': '/imu',
             'umbral_patinaje_deg': 8.0,
             'cmd_vel_topic': '/cmd_vel',
-            'wall_follow_topic': '/wall_follow/cmd_vel_suggestion',
             'pare_topic': '/pare_detectado',
             'event_topic': '/robot_event',
             'robot_state_topic': '/maze/estado',
@@ -438,7 +428,7 @@ class MazeSolverNode(Node):
             'ruta_celda_inicio': 'A7',
             'ruta_heading_inicial': 'NORTE',
             # Ruta rapida FIJA (fase 2): guion de tramos fijo, ya conocido de
-            # la pista, en vez de calcularlo por BFS sobre el grafo mapeado.
+            # la pista, sin depender del recorrido de mapeo.
             # ruta_fija_giros tiene un giro por tramo (relativo: NINGUNO gira
             # nada) y ruta_fija_distancias_m la distancia de CADA tramo (misma
             # cantidad de elementos). El PRIMER y el ULTIMO tramo usan
@@ -477,12 +467,10 @@ class MazeSolverNode(Node):
         self._outlier_max_iter = int(g('outlier_max_iter'))
         self._outlier_residuo = float(g('outlier_residuo_m'))
 
-        self._lidar_zones_topic = g('lidar_zones_topic')
         self._odom_topic = g('odom_topic')
         self._imu_topic = g('imu_topic')
         self._umbral_patinaje = float(g('umbral_patinaje_deg'))
         self._cmd_vel_topic = g('cmd_vel_topic')
-        self._wall_follow_topic = g('wall_follow_topic')
         self._pare_topic = g('pare_topic')
         self._event_topic = g('event_topic')
         self._robot_state_topic = g('robot_state_topic')
@@ -643,46 +631,40 @@ class MazeSolverNode(Node):
         self._pare_activo = detectado
         self._pare_anterior = detectado
 
-    def _on_wall_follow(self, msg: Twist):
-        self._wall_follow_cmd = msg
-
     def _on_verde(self, msg: Bool):
-        """Marca la celda de la meta la primera vez que se confirma el verde.
+        """Marca la meta la primera vez que se confirma el verde.
 
         No cambia el estado ni el comando: el verde sigue sin afectar el
-        mapeo. Solo registra donde esta la meta para la ruta corta (fase 2).
+        mapeo. La marca detiene el ultimo tramo de la ruta fija y congela las
+        metricas de llegada.
         """
         activo = bool(msg.data)
-        if (activo and not self._verde_anterior and self._ruta_activa
-                and self._explorer is not None and self._meta_cell is None):
-            self._meta_cell = self._explorer.cell
+        if activo and not self._verde_anterior and not self._meta_detectada:
+            self._meta_detectada = True
             # Congela tiempo_s/long_ruta_cm aca (INICIO->META): si el
             # carrito sigue dando la vuelta al laberinto despues de ver el
             # verde (logica_dos_reglas no se detiene sola), esos dos campos
             # no deben seguir creciendo con ese recorrido extra.
             self._metricas_meta = self._metricas_actuales()
             self._publish_event(
-                EV.META, f'meta (verde) registrada en celda {self._meta_cell}'
+                EV.META, 'meta (verde) registrada'
             )
         self._verde_anterior = activo
 
     def _on_calcular_ruta(self, msg: Bool):
         """Comando 1: FRENAR el mapeo + CALCULAR la ruta.
 
-        Frena y calcula la ruta SOLO si ya se detecto el verde (meta); ahi
-        detiene el carrito (sin matar el nodo: conserva el grafo) y lo deja
-        quieto en ESPERA_RUTA con el amarillo pintado. Si aun no vio el verde,
-        NO frena: sigue mapeando. Es la unica forma de frenar -- NO uses Ctrl+C,
-        que borraria el mapeo. Nunca parte solo."""
+        Carga el guion fijo, detiene el carrito y lo deja quieto en
+        ESPERA_RUTA con el amarillo pintado. Nunca parte solo."""
         if not bool(msg.data):
             return
-        if not self._ruta_activa or self._explorer is None:
+        if not self._ruta_activa:
             self._publish_event(EV.TIMEOUT, 'calcular_ruta ignorado: ruta_activa=false')
             return
         if self._terminado or self._state in ('ESPERA_RUTA', 'SEGUIR_RUTA', 'META'):
             return
         if not self._calcular_ruta():
-            return   # sin verde/meta todavia: NO frena, sigue mapeando
+            return
         self._publish_twist(Twist())
         self._publish_event(
             EV.META,
@@ -699,7 +681,7 @@ class MazeSolverNode(Node):
         solo. Requiere que la ruta ya este calculada (/maze/calcular_ruta)."""
         if not bool(msg.data):
             return
-        if not self._ruta_activa or self._explorer is None:
+        if not self._ruta_activa:
             self._publish_event(EV.TIMEOUT, 'iniciar_ruta ignorado: ruta_activa=false')
             return
         if self._terminado or self._state == 'SEGUIR_RUTA':
@@ -708,7 +690,7 @@ class MazeSolverNode(Node):
             self._publish_event(
                 EV.TIMEOUT,
                 'iniciar_ruta ignorado: no hay ruta calculada '
-                '(usa /maze/calcular_ruta; falta ver el verde?)'
+                '(usa /maze/calcular_ruta)'
             )
             return
         self._ruta_idx = 0
@@ -767,10 +749,6 @@ class MazeSolverNode(Node):
             return
 
         self._STATE_HANDLERS[self._state]()
-
-        # Grabacion pasiva del grafo de celdas para la ruta corta (fase 2).
-        # Corre DESPUES del handler y no modifica ninguna decision de mapeo.
-        self._registrar_avance_ruta()
 
         # Monitor: si acumula mas de 360 grados girando, corrige al contrario.
         self._monitor_rotacion()
@@ -1064,7 +1042,7 @@ class MazeSolverNode(Node):
                 self._set_state('DETECTAR_CRUCE')
             return
 
-        self._publish_twist(self._wall_follow_cmd)
+        self._publish_twist(self._twist_wall_follow())
 
     def _handle_avanzar_paralelo_dos_reglas(self):
         """CUATRO REGLAS (ver logica_dos_reglas arriba), con AJUSTE DE
@@ -1427,11 +1405,6 @@ class MazeSolverNode(Node):
         if angulo_girado >= self._angulo_giro_rad or angulo_girado >= self._angulo_maximo_giro_rad:
             self._publish_twist(Twist())
             self._grid.apply_turn(self._decision_actual)
-            # Grabacion pasiva del giro para la ruta corta (no altera el mapeo).
-            if self._ruta_activa and self._explorer is not None:
-                self._explorer.girar(self._decision_actual)
-                self._ruta_dist_acc = 0.0
-                self._ruta_last_xy = (self._odom_x, self._odom_y)
             self.get_logger().info(
                 f'GIRO TERMINADO (90 fijo): girado={math.degrees(angulo_girado):.0f} deg'
             )
@@ -1544,39 +1517,9 @@ class MazeSolverNode(Node):
     # ------------------------------------------------------------------
     # FASE 2: ruta rapida FIJA + freno + manejo por guion de movimientos
     # ------------------------------------------------------------------
-    def _registrar_avance_ruta(self):
-        """Discretiza el avance recto del MAPEO en celdas y graba el grafo.
-
-        Solo acumula distancia mientras el mapeo avanza recto
-        (AVANZAR_PARALELO); en cualquier otro estado re-ancla la referencia
-        para no contar los arcos de giro. Cada tamano_celda_m recorridos
-        registra un avance de celda y revisa si el robot regreso a la base.
-        No modifica ninguna variable del mapeo.
-        """
-        if not self._ruta_activa or self._explorer is None or self._terminado:
-            return
-        if self._state in ('ESPERA_RUTA', 'SEGUIR_RUTA'):
-            return   # detenido esperando, o manejando: no grabar
-        # Cuenta avances de celda (solo en el avance recto del mapeo). El carrito
-        # NO frena solo al volver al inicio: solo frena con /maze/calcular_ruta.
-        if self._state != 'AVANZAR_PARALELO':
-            self._ruta_last_xy = (self._odom_x, self._odom_y)
-            return
-        if self._ruta_last_xy is None:
-            self._ruta_last_xy = (self._odom_x, self._odom_y)
-            return
-        dx = self._odom_x - self._ruta_last_xy[0]
-        dy = self._odom_y - self._ruta_last_xy[1]
-        self._ruta_last_xy = (self._odom_x, self._odom_y)
-        self._ruta_dist_acc += math.hypot(dx, dy)
-        while self._ruta_dist_acc >= self._tamano_celda:
-            self._ruta_dist_acc -= self._tamano_celda
-            self._explorer.avanzar()
-
     def _calcular_ruta(self) -> bool:
         """Carga la ruta rapida FIJA: un guion de tramos fijo y conocido de
-        la pista (ruta_fija_giros/ruta_fija_distancias_m), en vez de
-        calcularlo por BFS sobre el grafo mapeado. El primer y el ultimo
+        la pista (ruta_fija_giros/ruta_fija_distancias_m). El primer y el ultimo
         tramo usan wall-follow (mantenerse recto); el ultimo ademas corta
         apenas detecta verde, aunque no haya llegado a su distancia (tope
         de seguridad). NO mueve el carrito ni cambia de estado. Devuelve
@@ -1749,7 +1692,7 @@ class MazeSolverNode(Node):
         else:
             tiempo_s = 0.0
         return {
-            'llego_meta': self._meta_cell is not None,
+            'llego_meta': self._meta_detectada,
             'tiempo_s': round(tiempo_s, 1),
             'long_ruta_cm': round(self._distancia_total_m * 100.0, 1),
             'colisiones': self._contador_colisiones,

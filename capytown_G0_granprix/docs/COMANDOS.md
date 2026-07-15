@@ -24,7 +24,7 @@ cd ~/yahboomcar_ws && source install/setup.bash && ros2 launch capytown_g0_granp
 
 ## Ruta más corta (fase 2) — dos comandos
 
-El carrito NUNCA parte solo. Cuando ya vio la meta (verde):
+El carrito NUNCA parte solo. Para cargar y ejecutar el guion fijo:
 
 ```bash
 # 1) CALCULAR: pinta la ruta de amarillo y deja el carrito DETENIDO
@@ -37,8 +37,7 @@ cd ~/yahboomcar_ws && source install/setup.bash && \
 ros2 topic pub --once /maze/iniciar_ruta std_msgs/msg/Bool "{data: true}"
 ```
 
-`calcular_ruta` **solo funciona si ya se marcó la meta** (se vio el verde); si
-no, no frena y sigue mapeando.
+`calcular_ruta` carga el guion fijo aunque todavía no se haya visto la meta.
 
 El comando 2 (`iniciar_ruta`) es **repetible**: al terminar la ruta el carrito
 vuelve a estar detenido con el amarillo pintado, así podés recolocarlo en el

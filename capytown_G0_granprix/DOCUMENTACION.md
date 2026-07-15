@@ -48,6 +48,7 @@ Ver la sección «Fase 2: ruta más corta» más abajo.
 | `motion_lidar.py` | Ventanas, distancias y ajuste de recta copiados de la referencia. |
 | `motion_geometry.py` / `motion_grid.py` | Yaw, ángulos y seguimiento lógico de celda. |
 | `pare_detector.py` | Detecta rojo y verde en `/image_raw`; publica imagen de depuración. |
+| `metrics_logger.py` | Guarda en CSV las métricas publicadas por `maze_solver`. |
 | `visualizador_web.py` | Publica por HTTP cámara, LiDAR, odometría, estados y recorrido. |
 | `web/index.html` | Dibuja cámara, puntos LiDAR, mapa, trayectoria, PARE y META. |
 | `config/navegacion_params.yaml` | Copia documentada de los parámetros incorporados en `maze_solver`. |
@@ -91,8 +92,8 @@ PAUSA_CHEQUEO_PARED verifica la distancia lateral del lado seguido:
   lado VACÍO (> umbral_lado_libre_m, 0.30 m) confirmado
   chequeo_pared_confirmaciones_ciclos (5)
     -> GIRAR 90° IZQUIERDA (entra al hueco)
-    -> AVANCE_GIRO_VACIO (avanza 0.12 m)
-    -> si sigue vacío repite giro+avance (máximo 4 repeticiones)
+    -> AVANCE_GIRO_VACIO (avanza 0.10 m)
+    -> si sigue vacío repite giro+avance (máximo 2 repeticiones)
     -> AVANZAR_PARALELO cuando recupera pared
   lado OCUPADO y venía de obstáculo al frente
     -> GIRAR 90° DERECHA (se aleja de la pared seguida)
@@ -144,12 +145,10 @@ El detector aplica HSV, morfología, área, forma y confirmación temporal.
 
 ## Fase 2: ruta rápida (speed-run)
 
-Es una segunda fase ADITIVA que **no altera el mapeo**. La ruta ya no se
-calcula por BFS sobre el grafo mapeado: es un guion **FIJO**, conocido de la
-pista (`ruta_fija_giros` + `ruta_fija_distancias_m`), que no depende de haber
-visto el verde durante el mapeo. Con `ruta_activa=false` el comportamiento de
-mapeo es idéntico al mapeo puro (el grafo de celdas se sigue grabando de forma
-pasiva por si se necesita en el futuro, pero ya no alimenta la ruta).
+Es una segunda fase ADITIVA que **no altera el mapeo**. La ruta es un guion
+**FIJO**, conocido de la pista (`ruta_fija_giros` +
+`ruta_fija_distancias_m`), que no depende de haber visto el verde durante el
+mapeo. Con `ruta_activa=false` el comportamiento de mapeo no cambia.
 
 El carrito **NUNCA frena ni parte solo**. La ruta se maneja en **dos comandos**:
 
@@ -161,7 +160,7 @@ El carrito **NUNCA frena ni parte solo**. La ruta se maneja en **dos comandos**:
   `ESPERA_RUTA` (detenido), así podés colocarlo de nuevo en el inicio y
   reenviar el comando cuantas veces quieras para probar.
 
-El guion fijo por defecto: avanza 1.05m recto, gira 90° DERECHA, avanza 1.05m,
+El guion fijo por defecto: avanza 1.02m recto, gira 90° DERECHA, avanza 1.02m,
 gira 90° IZQUIERDA, avanza 0.55m, gira 90° DERECHA y avanza recto hasta 1.85m
 o hasta detectar verde (lo que ocurra primero — 1.85m es un tope de seguridad,
 no la condición normal de corte). El primer y el último tramo usan
@@ -176,8 +175,8 @@ Parámetros (sincronizados con `navegacion_params.yaml`): `ruta_activa`,
 `ruta_fija_giros` (lista de giros relativos, uno por tramo: `NINGUNO` no gira),
 `ruta_fija_distancias_m` (distancia de cada tramo, misma cantidad de elementos
 que `ruta_fija_giros`; la del último es un tope de seguridad ya que ese tramo
-corta antes si detecta verde), `tamano_celda_m` (0.30, aún usado para
-discretizar el grafo grabado pasivamente), `ruta_celda_inicio` (A7),
+corta antes si detecta verde), `tamano_celda_m` (0.30, usado para proyectar el
+guion fijo en la grilla del visualizador), `ruta_celda_inicio` (A7),
 `ruta_heading_inicial`, `verde_topic`, `ruta_topic`, `calcular_ruta_topic`,
 `iniciar_ruta_topic`.
 

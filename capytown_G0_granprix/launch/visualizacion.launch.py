@@ -2,9 +2,9 @@
 """
 visualizacion.launch.py - Lanza el emisor web para visualizar desde la laptop.
 
-El render ya no corre en la Pi: este launch expone los datos en /data y
-arranca el detector rojo/amarillo/verde y el aviso sonoro para mantener el
-flujo de trabajo de 3 comandos.
+El render ya no corre en la Pi: este launch expone los datos en /data, arranca
+el detector rojo/amarillo/verde, el registro de métricas y el aviso sonoro para
+mantener el flujo de trabajo de 3 comandos.
 Abrir web/index.html en la laptop y conectar a http://<IP-del-carrito>:8080/data.
 """
 
@@ -16,9 +16,9 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    pare_params = os.path.join(
-        get_package_share_directory('capytown_g0_granprix'),
-        'config', 'pare_params.yaml')
+    share = get_package_share_directory('capytown_g0_granprix')
+    pare_params = os.path.join(share, 'config', 'pare_params.yaml')
+    metricas_params = os.path.join(share, 'config', 'metricas_params.yaml')
 
     return LaunchDescription([
         # Detector rojo/amarillo/verde. También publica la secuencia del buzzer
@@ -30,6 +30,13 @@ def generate_launch_description():
             name='pare_detector',
             output='screen',
             parameters=[pare_params],
+        ),
+        Node(
+            package='capytown_g0_granprix',
+            executable='metrics_logger',
+            name='metrics_logger',
+            output='screen',
+            parameters=[metricas_params],
         ),
         # Emisor JSON liviano. El frontend se abre en la laptop.
         Node(
