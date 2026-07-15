@@ -27,27 +27,54 @@ source install/setup.bash
 
 ## Ejecución
 
-El sistema utiliza tres terminales.
+El sistema utiliza tres terminales permanentes y una cuarta terminal para
+calcular e iniciar la ruta corta.
 
 Terminal 1, navegación:
 
 ```bash
-cd ~/yahboomcar_ws && source install/setup.bash && ros2 run capytown_g0_granprix maze_solver
+cd ~/yahboomcar_ws
+source install/setup.bash
+ros2 run capytown_g0_granprix maze_solver
 ```
 
 Terminal 2, cámara USB:
 
 ```bash
-cd ~/yahboomcar_ws && source install/setup.bash && ros2 launch capytown_g0_granprix solo_camara.launch.py
+cd ~/yahboomcar_ws
+source install/setup.bash
+ros2 launch capytown_g0_granprix solo_camara.launch.py
 ```
 
 Terminal 3, detección, métricas y visualización:
 
 ```bash
-cd ~/yahboomcar_ws && source install/setup.bash && ros2 launch capytown_g0_granprix visualizacion.launch.py
+cd ~/yahboomcar_ws
+source install/setup.bash
+ros2 launch capytown_g0_granprix visualizacion.launch.py
 ```
 
 Solo `maze_solver` publica en `/cmd_vel`.
+
+Terminal 4, calcular y mostrar la ruta corta:
+
+```bash
+cd ~/yahboomcar_ws
+source install/setup.bash
+ros2 topic pub --once /maze/calcular_ruta std_msgs/msg/Bool "{data: true}"
+```
+
+Este comando carga la ruta fija, la dibuja en amarillo y deja el carrito
+detenido. Luego se debe colocar el carrito en el inicio mirando al norte.
+
+En la misma terminal, iniciar el recorrido de la ruta corta:
+
+```bash
+ros2 topic pub --once /maze/iniciar_ruta std_msgs/msg/Bool "{data: true}"
+```
+
+El segundo comando puede repetirse cada vez que el carrito vuelva a colocarse
+en el inicio.
 
 ## Componentes
 
