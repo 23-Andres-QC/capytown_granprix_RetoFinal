@@ -27,7 +27,7 @@ setup(
     license='MIT',
     entry_points={
         'console_scripts': [
-            # FSM y calibraciones de movimiento del proyecto de referencia.
+
             'maze_solver = capytown_g0_granprix.maze_solver:main',
             'pare_detector = capytown_g0_granprix.pare_detector:main',
             'metrics_logger = capytown_g0_granprix.metrics_logger:main',

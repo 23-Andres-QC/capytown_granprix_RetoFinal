@@ -1,4 +1,4 @@
-"""Tipos de evento internos del controlador de movimiento."""
+"""Módulo motion_events."""
 
 INICIO = 'INICIO'
 CRUCE = 'CRUCE'

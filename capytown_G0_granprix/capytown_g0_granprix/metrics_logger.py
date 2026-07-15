@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""
-metrics_logger.py — Métricas del Gran Prix → metricas_granprix.csv
-
-Mismo patrón que el metrics_logger del RC de LiDAR (REUTILIZADO): escucha
-en vivo y agrega UNA fila al CSV al cerrar el nodo (Ctrl+C) o al llegar a
-la META. Los campos son exactamente los del enunciado del Gran Prix.
-
-Los contadores en vivo los publica maze_solver en /maze/metricas (JSON).
-Lo que el robot no puede saber solo se declara por parámetro:
-  · ronda            (1 = exploración, 2 = time attack)
-  · pare_reales      (cuántas señales colocó el docente en la pista)
-  · long_optima_cm   (ruta más corta del trazado, medida sobre el plano)
-  · pare_falsos      (detenciones sin señal, contadas por el juez/docente)
-
-ESAN - Robótica de Móviles 2026-I | CapyTown Gran Prix
-"""
+"""Módulo metrics_logger."""
 
 import csv
 import json
@@ -36,6 +21,7 @@ CAMPOS = [
 
 class MetricsLogger(Node):
     def __init__(self):
+        """Inicializa el componente."""
         super().__init__('metrics_logger')
 
         self.declare_parameter('ronda', 1)
@@ -61,16 +47,18 @@ class MetricsLogger(Node):
             f'optima={self.long_optima_cm:.0f} cm | CSV → {self.archivo}')
 
     def cb_metricas(self, msg: String):
+        """Procesa cb metricas."""
         try:
             self.ultimas = json.loads(msg.data)
         except json.JSONDecodeError:
             return
-        # al llegar a META se guarda de inmediato (no depende del Ctrl+C)
+
         if self.ultimas.get('llego_meta') and not self.guardado:
             self.guardar_csv()
             self.guardado = True
 
     def guardar_csv(self):
+        """Ejecuta guardar csv."""
         if self.ultimas is None:
             self.get_logger().warn('sin datos de /maze/metricas — no se guarda')
             return
@@ -106,6 +94,7 @@ class MetricsLogger(Node):
 
 
 def main(args=None):
+    """Inicia el nodo."""
     rclpy.init(args=args)
     nodo = MetricsLogger()
     try:

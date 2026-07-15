@@ -1,1 +1,1 @@
-"""CapyTown Gran Prix ROS 2 package."""
+"""Módulo __init__."""

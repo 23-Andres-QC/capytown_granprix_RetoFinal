@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-solo_camara.launch.py - Lanza solo la camara USB en modo YUYV estable.
-"""
+"""Módulo solo_camara.launch."""
 
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess, TimerAction
@@ -9,6 +7,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    """Ejecuta generate launch description."""
     matar_camaras_previas = ExecuteProcess(
         cmd=['bash', '-lc', 'pkill -f "[u]sb_cam_node_exe" || true'],
         output='screen',
@@ -30,10 +29,7 @@ def generate_launch_description():
         }],
     )
 
-    # Fija los 2 servos de la cámara en una posición constante al arrancar
-    # (pan s1=0 centrado, tilt s2=-5) para que el frame quede siempre igual y
-    # la detección de PARE por centro sea consistente. Se publica varias veces
-    # por si el agente micro-ROS aún estaba enganchando la suscripción.
+
     fijar_servo = TimerAction(period=2.0, actions=[
         ExecuteProcess(
             cmd=['ros2', 'topic', 'pub', '-t', '3', '/servo_s1',

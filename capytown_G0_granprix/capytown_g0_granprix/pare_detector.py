@@ -1,31 +1,5 @@
 #!/usr/bin/env python3
-"""
-pare_detector.py — Detección de la señal PARE por cámara (Gran Prix).
-
-REUTILIZA el pipeline del detector de señales del RC de visión
-(Line_Detector_RosCar_Pi_R2 / lane_detector.py): segmentación por color
-en HSV + morfología + filtrado de blobs por forma con
-connectedComponentsWithStats. Cambios respecto al RC:
-
-  · El color objetivo es el ROJO del cartel PARE. El rojo en HSV cruza
-    el 0 del hue, así que se combinan DOS rangos (0–h_bajo y h_alto–179)
-    en vez del rango único del amarillo.
-  · El filtro de forma es el inverso del RC: allí se buscaban cintas
-    ALARGADAS (elongación alta); un cartel PARE es un blob COMPACTO
-    (relación de aspecto ~1, solidez alta). Un reflejo rojo alargado o
-    un cable rojo NO pasan el filtro.
-  · El rojo se acepta en cualquier posición de la imagen. La banda central
-    (centro_tol_frac) se conserva únicamente para el detector amarillo.
-
-Tópicos:
-    sub  /image_raw            (sensor_msgs/Image)
-    pub  /pare_detectado       (std_msgs/Bool)   — ROJO (PARE) confirmado
-    pub  /verde_detectado      (std_msgs/Bool)   — VERDE opaco confirmado
-    pub  /amarillo_detectado   (std_msgs/Bool)   — AMARILLO confirmado
-    pub  /beep                 (std_msgs/UInt16) — un pitido ("pi") al ver rojo/amarillo
-    pub  /pare/area            (std_msgs/Float32) — área del blob rojo (debug/tuning)
-    pub  /pare/debug_image     (sensor_msgs/Image) — overlay rojo+verde para captura
-"""
+"""Módulo pare_detector."""
 
 import cv2
 import numpy as np
@@ -39,56 +13,54 @@ from cv_bridge import CvBridge
 
 class PareDetector(Node):
     def __init__(self):
+        """Inicializa el componente."""
         super().__init__('pare_detector')
         self.bridge = CvBridge()
 
         self.declare_parameters('', [
-            # Rojo en HSV — DOS rangos porque el hue del rojo cruza 0/179
+
             ('rojo_h_bajo_max',   10),
             ('rojo_h_alto_min',  170),
             ('rojo_s_min',       100),
             ('rojo_v_min',        70),
-            # Amarillo: rango HSV separado del verde y del rojo.
+
             ('amarillo_h_min',    20),
             ('amarillo_h_max',    35),
             ('amarillo_s_min',   100),
             ('amarillo_v_min',    80),
             ('amarillo_area_min', 600),
-            # Verde OPACO/apagado (cartel META, verde sage poco saturado):
-            # s_min bajo para agarrar el verde grisáceo; h fuera del beige de la
-            # pared (naranja) y el blanco/gris queda fuera por S baja.
+
+
             ('verde_h_min',       35),
             ('verde_h_max',       95),
             ('verde_s_min',       40),
             ('verde_s_max',      255),
             ('verde_v_min',       60),
             ('verde_v_max',      255),
-            # Descarta motas/reflejos, pero conserva carteles, tubos y objetos.
+
             ('verde_area_min',    600),
             ('verde_aspecto_min', 0.05),
             ('verde_aspecto_max', 20.0),
             ('verde_area_max',  150000),
             ('verde_solidez_min', 0.35),
-            # Forma del cartel (blob compacto, no cinta)
+
             ('area_min',         600),
             ('area_max',       60000),
-            ('aspecto_min',      0.5),   # w/h del bounding box
+            ('aspecto_min',      0.5),
             ('aspecto_max',      2.0),
-            ('solidez_min',      0.75),  # area / area del convex hull
-            # Fraccion vertical (desde arriba) donde se busca el ROJO (y el
-            # amarillo). 1.0 = TODA la camara.
+            ('solidez_min',      0.75),
+
+
             ('franja_inferior',  1.0),
-            # El VERDE (meta) se busca en los 2/3 SUPERIORES de la imagen
-            # (0.6667). Todo lo del tercio inferior queda fuera.
+
+
             ('franja_verde',     0.6667),
-            # Solo se acepta el PARE si su centro está en la BANDA CENTRAL
-            # horizontal: |cx_blob - cx_img| <= centro_tol_frac * ancho.
-            ('centro_tol_frac',  0.20),  # 0.20 → banda central del 40% del ancho
-            ('frames_confirmacion', 3),  # frames seguidos para rechazar destellos
-            # Tiempo minimo entre pitidos: un solo frame que pierda el color
-            # (ruido/reflejo) resetea el contador de confirmacion y, al
-            # re-confirmarse en seguida, generaba un flanco nuevo (pitido
-            # repetido) sin que el carrito se moviera del cartel.
+
+
+            ('centro_tol_frac',  0.20),
+            ('frames_confirmacion', 3),
+
+
             ('beep_cooldown_s',  5.0),
             ('publish_debug',    True),
             ('topic_camera',      '/image_raw'),
@@ -148,8 +120,9 @@ class PareDetector(Node):
             f'rojo H<= {self.h_bajo} o H>={self.h_alto}, '
             f'S>={self.s_min}, V>={self.v_min} | area>={self.area_min}')
 
-    # ------------------------------------------------------------------
+
     def on_image(self, msg: Image):
+        """Procesa on image."""
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         except Exception as e:
@@ -157,17 +130,16 @@ class PareDetector(Node):
             return
 
         h, w = frame.shape[:2]
-        # ROJO y AMARILLO: toda la cámara (franja_inferior=1.0).
+
         hsv = cv2.cvtColor(frame[:int(self.franja_inferior * h), :],
                            cv2.COLOR_BGR2HSV)
-        # VERDE (meta): SOLO los 2/3 superiores (franja_verde=0.6667).
+
         hsv_verde = cv2.cvtColor(frame[:max(1, int(self.franja_verde * h)), :],
                                  cv2.COLOR_BGR2HSV)
 
         area_min = self.area_min
 
-        # ROJO (PARE): en TODA la cámara y en CUALQUIER posición (no exige
-        # que el cartel esté centrado -> exigir_centro=False).
+
         mask_rojo = self._mascara_rojo(hsv)
         mask_rojo = self._quitar_componentes_pequenos(mask_rojo, area_min)
         det_r, mejor_r = self._validar_forma(mask_rojo, area_min,
@@ -175,7 +147,7 @@ class PareDetector(Node):
         self.frames_seguidos = self.frames_seguidos + 1 if det_r else 0
         conf_r = self.frames_seguidos >= self.frames_confirmacion
 
-        # VERDE (opaco) -- solo en la banda superior (hsv_verde)
+
         mask_verde = self._mascara_verde(hsv_verde)
         mask_verde = self._quitar_componentes_pequenos(
             mask_verde, self.verde_area_min)
@@ -189,8 +161,7 @@ class PareDetector(Node):
         self.frames_seguidos_verde = self.frames_seguidos_verde + 1 if det_v else 0
         conf_v = self.frames_seguidos_verde >= self.frames_confirmacion
 
-        # AMARILLO. Usa el mismo filtro compacto del cartel rojo y exige
-        # confirmación temporal para no activar el buzzer por reflejos.
+
         mask_amarillo = self._mascara_amarillo(hsv)
         mask_amarillo = self._quitar_componentes_pequenos(
             mask_amarillo, self.amarillo_area_min)
@@ -206,10 +177,7 @@ class PareDetector(Node):
         self.pub_area.publish(Float32(
             data=float(mejor_r['area']) if mejor_r else 0.0))
 
-        # Un pitido ("pi") por deteccion, con cooldown: si el flanco se
-        # repite antes de beep_cooldown_s (recuperacion tras perder el
-        # color un solo frame) se ignora, para no repetir el pitido sin
-        # que el carrito se haya alejado del cartel.
+
         ahora = self.get_clock().now()
         en_cooldown = (self._ultimo_beep is not None and
                        (ahora - self._ultimo_beep).nanoseconds / 1e9
@@ -227,15 +195,17 @@ class PareDetector(Node):
                                  mejor_r, mejor_v, mejor_a,
                                  conf_r, conf_v, conf_a, msg)
 
-    # ------------------------------------------------------------------
+
     def _limpiar(self, mask):
+        """Ejecuta limpiar."""
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         return mask
 
     def _mascara_rojo(self, hsv):
-        # el hue del rojo cruza 0/179 → dos rangos
+
+        """Ejecuta mascara rojo."""
         lo1 = np.array([0, self.s_min, self.v_min], dtype=np.uint8)
         hi1 = np.array([self.h_bajo, 255, 255], dtype=np.uint8)
         lo2 = np.array([self.h_alto, self.s_min, self.v_min], dtype=np.uint8)
@@ -244,30 +214,28 @@ class PareDetector(Node):
                                             cv2.inRange(hsv, lo2, hi2)))
 
     def _mascara_verde(self, hsv):
+        """Ejecuta mascara verde."""
         lo = np.array([self.verde_h_min, self.verde_s_min, self.verde_v_min], dtype=np.uint8)
         hi = np.array([self.verde_h_max, self.verde_s_max, self.verde_v_max], dtype=np.uint8)
         return self._limpiar(cv2.inRange(hsv, lo, hi))
 
     def _mascara_amarillo(self, hsv):
+        """Ejecuta mascara amarillo."""
         lo = np.array([self.amarillo_h_min, self.amarillo_s_min,
                        self.amarillo_v_min], dtype=np.uint8)
         hi = np.array([self.amarillo_h_max, 255, 255], dtype=np.uint8)
         return self._limpiar(cv2.inRange(hsv, lo, hi))
 
-    # Un solo pitido corto ("pi"). El valor es la duracion (ms) de un
-    # one-shot del buzzer: se apaga solo, no requiere un comando de STOP.
+
     _BEEP_DURACION_MS = 150
 
     def _iniciar_beep(self):
+        """Ejecuta iniciar beep."""
         self.pub_beep.publish(UInt16(data=self._BEEP_DURACION_MS))
 
     @staticmethod
     def _quitar_componentes_pequenos(mask, area_min):
-        """Conserva solo regiones conectadas suficientemente grandes.
-
-        Se aplica antes del overlay para que la web no pinte motas verdes que
-        nunca podrían convertirse en una detección válida.
-        """
+        """Ejecuta quitar componentes pequenos."""
         n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
         limpia = np.zeros_like(mask)
         for etiqueta in range(1, n):
@@ -275,14 +243,11 @@ class PareDetector(Node):
                 limpia[labels == etiqueta] = 255
         return limpia
 
-    # ------------------------------------------------------------------
+
     def _validar_forma(self, mask, area_min, aspecto_min=None,
                        aspecto_max=None, area_max=None, solidez_min=None,
                        exigir_centro=True):
-        """Valida que un blob tenga forma de cartel compacto
-        (aspecto ~1) y sólido (sin huecos grandes) — un reflejo alargado
-        o ruido disperso no pasa. Si ``exigir_centro`` está activo, también
-        exige que el blob esté en la banda central horizontal."""
+        """Ejecuta validar forma."""
         aspecto_min = self.aspecto_min if aspecto_min is None else aspecto_min
         aspecto_max = self.aspecto_max if aspecto_max is None else aspecto_max
         area_max = self.area_max if area_max is None else area_max
@@ -310,21 +275,22 @@ class PareDetector(Node):
                 mejor = {'area': area, 'bbox': (x, y, bw, bh)}
         return mejor is not None, mejor
 
-    # ------------------------------------------------------------------
+
     def _publicar_debug(self, frame, mask_rojo, mask_verde, mask_amarillo,
                         mejor_r, mejor_v, mejor_a,
                         conf_r, conf_v, conf_a, header_msg):
+        """Publica publicar debug."""
         dbg = frame.copy()
         overlay = dbg.copy()
-        # Cada máscara puede tener distinto alto (rojo/amarillo = todo el frame,
-        # verde = solo la banda de arriba): pintar cada una con su propio alto.
-        overlay[:mask_rojo.shape[0]][mask_rojo > 0] = (0, 0, 255)        # rojo
-        overlay[:mask_verde.shape[0]][mask_verde > 0] = (0, 200, 0)      # verde
-        overlay[:mask_amarillo.shape[0]][mask_amarillo > 0] = (0, 220, 255)  # amarillo
+
+
+        overlay[:mask_rojo.shape[0]][mask_rojo > 0] = (0, 0, 255)
+        overlay[:mask_verde.shape[0]][mask_verde > 0] = (0, 200, 0)
+        overlay[:mask_amarillo.shape[0]][mask_amarillo > 0] = (0, 220, 255)
         cv2.addWeighted(overlay, 0.4, dbg, 0.6, 0, dbg)
         Hf, Wf = dbg.shape[:2]
-        # El ROJO se acepta en TODA la cámara (cualquier posición). El VERDE
-        # solo por encima de esta línea (2/3 superiores).
+
+
         yv = int(self.franja_verde * Hf)
         cv2.line(dbg, (0, yv), (Wf, yv), (0, 200, 0), 1)
         cv2.putText(dbg, 'VERDE arriba de esta linea', (5, max(14, yv - 6)),
@@ -355,6 +321,7 @@ class PareDetector(Node):
 
 
 def main(args=None):
+    """Inicia el nodo."""
     rclpy.init(args=args)
     node = PareDetector()
     try:

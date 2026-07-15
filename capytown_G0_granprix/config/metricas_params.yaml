@@ -1,4 +1,3 @@
-# Parametros del registro de metricas del Gran Prix
 metrics_logger:
   ros__parameters:
     ronda: 1

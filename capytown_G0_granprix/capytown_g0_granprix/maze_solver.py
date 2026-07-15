@@ -1,44 +1,5 @@
 #!/usr/bin/env python3
-"""Nodo de decision de intersecciones y maquina de estados principal.
-
-Es el UNICO nodo que escribe en ``/cmd_vel``: centraliza toda decision
-de movimiento para evitar que dos publicadores manden comandos
-contradictorios al mismo tiempo. Mientras el estado es
-AVANZAR_PARALELO, calcula la correccion de pared con el LiDAR; en el resto de
-estados calcula sus propios comandos (girar detenido-lento, alinear, detener).
-
-Maquina de estados (ver logica_pared_derecha_robot.md y
-DETALLE RETO 3.md):
-
-    INICIAR -> AVANZAR_PARALELO -> DETECTAR_CRUCE -> BUSCAR_PARE
-    -> DECIDIR -> PAUSA_GIRO -> GIRAR -> ALINEAR -> VERIFICAR_META
-    -> (META o vuelve a AVANZAR_PARALELO)
-
-    PAUSA_GIRO (fuera de la lista original del documento de referencia)
-    es una espera fija de ``tiempo_pausa_antes_girar_s`` con el robot
-    detenido entre "ya decidi" y "empiezo a girar", para que el giro se
-    vea como un movimiento separado del avance.
-
-    En logica_dos_reglas, cada ``distancia_chequeo_pared_m`` de avance
-    en linea recta se pasa por ``PAUSA_CHEQUEO_PARED`` en vez de
-    PAUSA_GIRO: detenido ``tiempo_chequeo_pared_s`` (0.5s) y verifica con
-    distancia PUNTUAL (no el ajuste de linea) si el lado derecho esta
-    ocupado (pared) o vacio antes de comprometerse a girar -- ver
-    ``_handle_pausa_chequeo_pared``.
-
-Se agrega un estado adicional ``DETENIDO`` (fuera de la lista pedida)
-solo como red de seguridad ante un limite de celdas recorridas sin
-llegar a la meta (evita loops infinitos por fallas de sensor); no
-reemplaza ni altera el flujo principal solicitado.
-
-Nota sobre giros con chasis Ackermann: un vehiculo con direccion
-Ackermann no puede rotar sobre su propio eje (radio de giro cero). El
-estado GIRAR aproxima el "giro detenido" del documento de referencia
-con un arco de avance lento y radio de giro pequeno (velocidad lineal
-baja + angular maxima), usando el yaw de ``/odom_raw`` como
-referencia de cierre en vez de tiempo fijo. Esto se debe calibrar en
-pista (ver README).
-"""
+"""Módulo maze_solver."""
 
 import json
 import math
@@ -66,17 +27,18 @@ from capytown_g0_granprix.motion_lidar import (
 class MazeSolverNode(Node):
 
     def __init__(self):
+        """Inicializa el componente."""
         super().__init__('maze_solver')
         self._declare_parameters()
         self._read_parameters()
 
         self._grid = GridTracker.from_cell_name(self._celda_inicio, self._heading_inicial)
 
-        # Estado de la maquina
+
         self._state = 'INICIAR'
         self._terminado = False
 
-        # Datos de sensores (ultimo valor recibido)
+
         self._zones = None
         self._zones_ready = False
         self._odom_x = 0.0
@@ -89,7 +51,7 @@ class MazeSolverNode(Node):
         self._pare_ignorar_xy = None
         self._freno_pare_start = None
 
-        # Variables de trabajo por estado
+
         self._cell_start_xy = (0.0, 0.0)
         self._avance_chequeo_start_xy = (0.0, 0.0)
         self._num_celdas = 0
@@ -124,31 +86,25 @@ class MazeSolverNode(Node):
         self._giro_vacio_repeticiones = 0
         self._avance_fijo_inicio_xy = (0.0, 0.0)
 
-        # --- FASE 2 (ruta corta / speed-run), todo aditivo ---
+
         self._verde_anterior = False
         self._meta_detectada = False
-        self._ruta_movimientos = None        # guion [{'giro','distancia_m'}, ...]
+        self._ruta_movimientos = None
         self._ruta_idx = 0
-        self._ruta_fase = 'GIRO'             # GIRO|AVANCE dentro de SEGUIR_RUTA
+        self._ruta_fase = 'GIRO'
         self._ruta_giro_yaw0 = 0.0
-        self._ruta_giro_restante = None      # sub-giros de 90 pendientes (ATRAS=2)
+        self._ruta_giro_restante = None
         self._ruta_avance_xy0 = (0.0, 0.0)
         self._ruta_json = None
         self._ruta_pub_counter = 0
 
-        # Monitor anti-vuelta-completa (>360 grados girando)
+
         self._yaw_prev_360 = None
         self._rot_acum = 0.0
         self._correccion_signo = 1.0
         self._yaw_correccion0 = 0.0
 
-        # --- Metricas Gran Prix (para metrics_logger.py via /maze/metricas) ---
-        # metrics_logger.py escucha este mismo topico esperando estos campos
-        # ademas de los de telemetria de visualizador_web -- se agregan aca
-        # sin tocar la logica de manejo. Se congelan en un snapshot al
-        # llegar a META (ver _on_verde) para que tiempo_s/long_ruta_cm
-        # reflejen el trayecto INICIO->META y no seguir sumando si el
-        # carrito continua dando la vuelta al laberinto despues de verla.
+
         self._tiempo_inicio = None
         self._distancia_total_m = 0.0
         self._odom_prev_xy = None
@@ -156,8 +112,8 @@ class MazeSolverNode(Node):
         self._contador_pare_detectados = 0
         self._contador_pare_respetados = 0
         self._metricas_meta = None
-        # Contador de giros fisicos de 90 reales -- ver nota junto a
-        # 'giros_fisicos' en _publish_twist.
+
+
         self._contador_giros_fisicos = 0
 
         self._STATE_HANDLERS = {
@@ -193,10 +149,10 @@ class MazeSolverNode(Node):
             Imu, self._imu_topic, self._on_imu, QoSPresetProfiles.SENSOR_DATA.value
         )
         self.create_subscription(Bool, self._pare_topic, self._on_pare, 10)
-        # El verde no controla el mapeo: solo marca la celda de la meta para
-        # poder calcular la ruta corta al regresar a la base (fase 2).
+
+
         self.create_subscription(Bool, self._verde_topic, self._on_verde, 10)
-        # Dos comandos de la ruta corta (fase 2): calcular (no mueve) y partir.
+
         self.create_subscription(
             Bool, self._calcular_ruta_topic, self._on_calcular_ruta, 10)
         self.create_subscription(
@@ -209,10 +165,9 @@ class MazeSolverNode(Node):
             f'heading_inicial={self._heading_inicial}'
         )
 
-    # ------------------------------------------------------------------
-    # Parametros
-    # ------------------------------------------------------------------
+
     def _declare_parameters(self):
+        """Ejecuta declare parameters."""
         defaults = {
             'scan_topic': '/scan',
             'front_offset_deg': 180.0,
@@ -224,10 +179,8 @@ class MazeSolverNode(Node):
             'right_window_deg': [-110.0, -70.0],
             'right_rear_window_deg': [-135.0, -105.0],
             'left_window_deg': [70.0, 110.0],
-            # Cono diagonal-adelante del lado izquierdo (espejo de
-            # right_front_window_deg): detecta que el lado seguido se abre
-            # ANTES de que el costado del robot llegue al hueco (regla 0 de
-            # deteccion temprana en _handle_avanzar_paralelo_dos_reglas).
+
+
             'left_front_window_deg': [65.0, 85.0],
             'right_side_window_deg': [-110.0, -70.0],
             'left_side_window_deg': [70.0, 110.0],
@@ -237,10 +190,8 @@ class MazeSolverNode(Node):
             'outlier_max_iter': 3,
             'outlier_residuo_m': 0.03,
             'odom_topic': '/odom_raw',
-            # Deteccion de patinaje en giros: compara cuanto giro segun la
-            # odometria de rueda vs. cuanto giro segun el giroscopio del IMU
-            # (no depende de las ruedas). Una diferencia grande indica que
-            # una rueda patino durante el giro.
+
+
             'imu_topic': '/imu',
             'umbral_patinaje_deg': 8.0,
             'cmd_vel_topic': '/cmd_vel',
@@ -249,115 +200,60 @@ class MazeSolverNode(Node):
             'robot_state_topic': '/maze/estado',
             'usar_camara': True,
             'control_rate_hz': 20.0,
-            # Modo de prueba: si es true, se saltan DETECTAR_CRUCE y
-            # BUSCAR_PARE -- decide con una lectura unica (sin
-            # confirmar con varias muestras). ALINEAR SI corre (no se
-            # salta): es el paso que corrige el giro contra la pared
-            # real via LiDAR en vez de confiar solo en el angulo
-            # objetivo fijo + odometria. Util para calibrar el giro de
-            # forma aislada, con el feedback de alineacion incluido.
+
+
             'modo_simplificado': True,
-            # SOLO DOS REGLAS (rama logica-alternativa, para probar en
-            # hardware lo mismo que sim_local/run_sim_laberinto.py::
-            # _correr_logica_simple): avanzar recto mientras el frente
-            # este libre; si hay obstaculo al frente, girar 90 grados a
-            # la IZQUIERDA fijo (sin mirar derecha/izquierda, sin
-            # seguir pared, sin celda, sin ALINEAR). Cuando esta en
-            # true, IGNORA modo_simplificado y el resto de la maquina
-            # de estados de cruce/PARE -- dejar en false para la
-            # corrida real de competencia.
+
+
             'logica_dos_reglas': True,
-            # Que lado sigue logica_dos_reglas: true = pared IZQUIERDA
-            # (left_line_*, left/left_valid), false = pared DERECHA
-            # (right_line_*, right/right_valid, el original). Al
-            # cambiar de lado tambien se espejan las direcciones de
-            # giro: obstaculo al frente gira hacia el lado NO seguido
-            # (aleja de la pared que sigue) y "vacio" gira hacia el
-            # lado SEGUIDO (entra al hueco que aparecio ahi). Ver
-            # _lado_seguido_* y _direccion_* en el codigo.
+
+
             'seguir_pared_izquierda': True,
             'velocidad_recta_mps': 0.15,
-            # Correccion lateral de logica_dos_reglas: usa el AJUSTE DE
-            # LINEA (right_line_*, angulo + distancia) en vez de la
-            # distancia puntual right_valid/right -- evita confundir una
-            # pared vista en diagonal con un obstaculo nuevo, porque el
-            # ajuste de linea da el angulo real de la pared en vez de un
-            # numero suelto. Misma formula que wall_follow_control.
-            # calcular_comando, re-declarada aqui porque este modo NO
-            # usa wall_follow_cmd en absoluto.
+
+
             'distancia_objetivo_m': 0.12,
-            # Correccion lateral mas estricta: mas ganancia en el termino
-            # de distancia (el que corrige que tan pegado va a la pared
-            # seguida) y algo mas en angulo; angular_max sube junto para
-            # que la correccion mas fuerte no se sature de inmediato.
+
+
             'ganancia_angulo_recta': 2.0,
             'ganancia_distancia_recta': 2.0,
             'angular_max_recta_radps': 0.6,
-            # Confirmacion de N ciclos seguidos con front_narrow
-            # bloqueado antes de girar -- un solo vistazo diagonal de un
-            # ciclo (100% ruido/transitorio) no alcanza para disparar un
-            # giro, tiene que sostenerse.
+
+
             'frente_confirmaciones_ciclos': 3,
-            # Chequeo PERIODICO del lado seguido (seguir_pared_
-            # izquierda), no deteccion continua por LiDAR (en la
-            # practica no distinguia bien "pared" de "hueco" -- ver
-            # commit anterior): cada distancia_chequeo_pared_m de
-            # avance en linea recta, se detiene por completo
-            # (PAUSA_CHEQUEO_PARED) tiempo_chequeo_pared_s y verifica
-            # con distancia PUNTUAL (no la linea) si el lado seguido
-            # esta ocupado o vacio.
+
+
             'distancia_chequeo_pared_m': 0.12,
             'tiempo_chequeo_pared_s': 0.5,
-            # "Lado derecho vacio" tiene que sostenerse esta cantidad
-            # de ciclos SEGUIDOS (no una sola lectura) antes de
-            # comprometerse a girar -- un giro a la derecha es una
-            # decision cara de revertir. "Ocupado" no necesita esto.
+
+
             'chequeo_pared_confirmaciones_ciclos': 5,
-            # Al girar por "lado seguido vacio" (no por obstaculo al
-            # frente): giro de 90 (mismo mecanismo de giro fijo,
-            # _handle_girar_dinamico) + avance recto de
-            # avance_giro_vacio_m -- y RECIEN AHI verifica de nuevo si
-            # el lado seguido sigue vacio. Si sigue vacio, repite el
-            # par giro+avance; si ya encuentra pared, retoma
-            # AVANZAR_PARALELO. giro_vacio_max_repeticiones es el tope
-            # de seguridad (evita girar para siempre en un espacio muy
-            # abierto). Ver AVANCE_GIRO_VACIO/_handle_avance_giro_vacio.
+
+
             'avance_giro_vacio_m': 0.10,
             'giro_vacio_max_repeticiones': 2,
-            # Giro de logica_dos_reglas: cierra el lazo por odometria
-            # contra angulo_giro_deg (90, fijo y exacto -- ver
-            # _handle_girar_dinamico). angulo_maximo_giro_deg es tope
-            # de seguridad adicional (por si el odometro se traba).
+
+
             'angulo_maximo_giro_deg': 150.0,
             'umbral_frente_pared_m': 0.30,
             'umbral_frente_libre_m': 0.35,
             'umbral_lado_libre_m': 0.30,
-            # Regla general de seguridad (siempre activa, en cualquier
-            # estado): objeto al frente mas cerca que esto -> detenerse
-            # de inmediato, esperar y volver a preguntar si esta libre. Se
-            # subio de 0.10 a 0.15 para frenar antes y evitar choques (el
-            # chasis Ackermann tiene inercia y el cono ancho promedia).
+
+
             'umbral_colision_m': 0.15,
-            # Al bloquearse por obstaculo frontal, retrocede esta distancia
-            # (odometria) antes de quedar esperando -- despega del objeto en
-            # vez de solo detenerse en seco. El retroceso gira hacia la
-            # IZQUIERDA mientras retrocede (arco, no en linea recta).
+
+
             'retroceso_obstaculo_m': 0.10,
             'velocidad_retroceso_obstaculo_mps': 0.06,
             'velocidad_retroceso_obstaculo_angular_radps': 0.9,
-            # Al terminar el retroceso, avanza esta distancia RECTO antes de
-            # pasar al chequeo normal (analiza de nuevo el entorno recien
-            # despues de este avance).
+
+
             'avance_post_retroceso_m': 0.10,
-            # Distancia lateral MINIMA al lado seguido (izquierda): si el LiDAR
-            # ve la pared izquierda mas cerca que esto, se corrige alejandose
-            # con fuerza para no rozarla (anti-choque lateral, ver
-            # _handle_avanzar_paralelo_dos_reglas).
+
+
             'umbral_lateral_min_m': 0.07,
-            # Correccion anti-vuelta-completa: si el robot acumula MAS de 360
-            # grados girando (se puso a dar vueltas), hace un giro de
-            # correccion_giro_grados al lado CONTRARIO para reorientarse y
-            # retoma el avance. Evita que quede girando en redondo.
+
+
             'correccion_giro_360': True,
             'correccion_giro_grados': 10.0,
             'tiempo_espera_obstaculo_s': 2.0,
@@ -368,75 +264,49 @@ class MazeSolverNode(Node):
             'velocidad_giro_lineal_mps': 0.06,
             'velocidad_giro_angular_radps': 0.6,
             'tolerancia_giro_deg': 4.0,
-            # Angulo objetivo de giro para DERECHA/IZQUIERDA (ATRAS
-            # siempre es 180, no usa este valor). 90 es el giro "real"
-            # de una esquina en grilla; un poco mas (ej. 95) compensa
-            # que el arco Ackermann suele quedar corto del objetivo.
+
+
             'angulo_giro_deg': 90.0,
-            # Pausa fija (segundos) con el robot detenido entre DECIDIR
-            # (ya sabe que va a girar) y el inicio del arco de GIRAR --
-            # pedido para que el giro sea un movimiento claramente
-            # separado del avance, no una transicion instantanea.
+
+
             'tiempo_pausa_antes_girar_s': 1.0,
             'tolerancia_alineacion_m': 0.02,
             'tiempo_max_alinear_s': 4.0,
             'velocidad_alineacion_lineal_mps': 0.06,
             'velocidad_alineacion_angular_radps': 0.3,
-            # FRENO_PARE solo congela el movimiento; al terminar retoma
-            # exactamente el estado interno que estaba ejecutando.
+
+
             'tiempo_pare_s': 5.0,
-            # Tras cumplirse tiempo_pare_s (terminado el FRENO_PARE), ignora
-            # nuevas detecciones de rojo hasta que el robot avance esta
-            # distancia (por odometria) desde el punto donde reanudo. Evita
-            # que el mismo cartel (u otro reflejo cercano) dispare un
-            # segundo FRENO_PARE sin haberse alejado de la senal.
+
+
             'distancia_ignorar_pare_m': 0.60,
             'tiempo_espera_camara_s': 0.5,
             'celda_inicio': 'A4',
             'celda_meta': 'F1',
             'heading_inicial': 'NORTE',
             'max_celdas_recorridas': 60,
-            # Factores de correccion de escala del odometro (calibrados en
-            # pista: avance real 76 cm / odometro 78.3 cm y giro real 90 /
-            # odometro 90.92). Dejar en 1.0 si se recalibra desde cero.
+
+
             'factor_dist_odom': 0.9474,
             'factor_ang_odom': 0.9899,
-            # ----------------------------------------------------------------
-            # FASE 2 (speed-run): ruta rapida FIJA (guion de tramos conocido
-            # de la pista, ver ruta_fija_giros/ruta_fija_distancias_m) que se
-            # MANEJA obedeciendo solo la ruta + la anticolision (sin logica
-            # de que lado seguir). El carrito NUNCA
-            # parte solo: hay dos comandos (calcular y partir, abajo). Todo es
-            # ADITIVO: no altera ninguna decision del mapeo. Con
-            # ruta_activa=false el comportamiento es identico al mapeo puro.
+
+
             'ruta_activa': True,
             'verde_topic': '/verde_detectado',
             'ruta_topic': '/maze/ruta_corta',
-            # DOS comandos para la ruta corta (el carrito NUNCA parte solo):
-            # - calcular_ruta_topic: calcula la ruta y la pinta de amarillo,
-            #   dejando el carrito DETENIDO (no se mueve).
-            # - iniciar_ruta_topic: recien con este comando el carrito PARTE y
-            #   maneja la ruta.
+
+
             'calcular_ruta_topic': '/maze/calcular_ruta',
             'iniciar_ruta_topic': '/maze/iniciar_ruta',
-            # Distancia por celda al MANEJAR la ruta (y para discretizar los
-            # avances del mapeo en celdas). Debe coincidir con CELDA_M del
-            # visualizador (0.30) para que el amarillo cuadre con el mapa.
+
+
             'tamano_celda_m': 0.30,
-            # Celda de arranque en la grilla 12x8 del mapa web (A7 = celda de
-            # inicio del carrito; coincide con INICIO_POS del visualizador).
+
+
             'ruta_celda_inicio': 'A7',
             'ruta_heading_inicial': 'NORTE',
-            # Ruta rapida FIJA (fase 2): guion de tramos fijo, ya conocido de
-            # la pista, sin depender del recorrido de mapeo.
-            # ruta_fija_giros tiene un giro por tramo (relativo: NINGUNO gira
-            # nada) y ruta_fija_distancias_m la distancia de CADA tramo (misma
-            # cantidad de elementos). El PRIMER y el ULTIMO tramo usan
-            # wall-follow (correccion lateral Kp, igual que el mapeo) para
-            # mantenerse rectos en vez de ir a ciegas por odometria; el
-            # ULTIMO tramo ademas corta apenas detecta verde, aunque no haya
-            # llegado a su distancia (la distancia del ultimo es un tope de
-            # seguridad por si el verde no se detecta a tiempo).
+
+
             'ruta_fija_giros': ['NINGUNO', 'DERECHA', 'IZQUIERDA', 'DERECHA'],
             'ruta_fija_distancias_m': [1.02, 1.02, 0.55, 1.85],
         }
@@ -444,7 +314,8 @@ class MazeSolverNode(Node):
             self.declare_parameter(name, value)
 
     def _read_parameters(self):
-        g = lambda name: self.get_parameter(name).value  # noqa: E731
+        """Ejecuta read parameters."""
+        g = lambda name: self.get_parameter(name).value
 
         self._scan_topic = g('scan_topic')
         self._front_offset_rad = math.radians(float(g('front_offset_deg')))
@@ -547,10 +418,9 @@ class MazeSolverNode(Node):
         self._ruta_fija_giros = list(g('ruta_fija_giros'))
         self._ruta_fija_distancias = [float(d) for d in g('ruta_fija_distancias_m')]
 
-    # ------------------------------------------------------------------
-    # Callbacks de suscripcion
-    # ------------------------------------------------------------------
+
     def _on_scan(self, msg: LaserScan):
+        """Procesa on scan."""
         ranges = np.asarray(msg.ranges, dtype=float)
         angles = compute_robot_frame_angles(
             ranges, msg.angle_min, msg.angle_increment,
@@ -576,16 +446,15 @@ class MazeSolverNode(Node):
         self._zones_ready = True
 
     def _on_odom(self, msg: Odometry):
-        # Correccion de escala del odometro (medida en pista, ver README):
-        # el ROSMASTER R2 sobreestima tanto distancia como angulo girado,
-        # de forma consistente, por lo que se corrige con un factor fijo.
+
+
+        """Procesa on odom."""
         self._odom_x = msg.pose.pose.position.x * self._factor_dist_odom
         self._odom_y = msg.pose.pose.position.y * self._factor_dist_odom
         self._yaw = yaw_from_quaternion(msg.pose.pose.orientation) * self._factor_ang_odom
         self._odom_ready = True
 
-        # long_ruta_cm (metrica Gran Prix): odometro acumulado sin importar
-        # el estado -- mismo patron que visualizador_web.odom_cm.
+
         if self._odom_prev_xy is not None:
             dx = self._odom_x - self._odom_prev_xy[0]
             dy = self._odom_y - self._odom_prev_xy[1]
@@ -593,9 +462,7 @@ class MazeSolverNode(Node):
         self._odom_prev_xy = (self._odom_x, self._odom_y)
 
     def _on_imu(self, msg: Imu):
-        """Integra el giroscopio (angular_velocity.z) SOLO durante GIRAR,
-        para comparar contra el angulo girado por odometria de rueda al
-        terminar el giro y detectar patinaje (ver _handle_girar)."""
+        """Procesa on imu."""
         ahora = self.get_clock().now()
         if self._state == 'GIRAR' and self._imu_t_prev is not None:
             dt = (ahora - self._imu_t_prev).nanoseconds / 1e9
@@ -603,21 +470,19 @@ class MazeSolverNode(Node):
         self._imu_t_prev = ahora
 
     def _on_pare(self, msg: Bool):
+        """Procesa on pare."""
         detectado = bool(msg.data)
         en_cooldown = False
         if self._pare_ignorar_xy is not None:
             dx = self._odom_x - self._pare_ignorar_xy[0]
             dy = self._odom_y - self._pare_ignorar_xy[1]
             en_cooldown = math.hypot(dx, dy) < self._distancia_ignorar_pare
-        # Solo el flanco de entrada dispara el freno. Mantener el cartel
-        # delante de la cámara no reinicia continuamente los cinco segundos.
-        # Ademas, tras cumplirse el FRENO_PARE (ver _on_timer) se ignoran
-        # nuevos flancos hasta avanzar distancia_ignorar_pare_m: evita que
-        # el mismo cartel dispare un segundo FRENO_PARE sin haberse alejado.
+
+
         if detectado and not self._pare_anterior:
             if en_cooldown:
-                # Diagnostico: confirma que el cooldown esta activo y
-                # descartando flancos repetidos del mismo cartel.
+
+
                 dx = self._odom_x - self._pare_ignorar_xy[0]
                 dy = self._odom_y - self._pare_ignorar_xy[1]
                 self._publish_event(
@@ -632,19 +497,12 @@ class MazeSolverNode(Node):
         self._pare_anterior = detectado
 
     def _on_verde(self, msg: Bool):
-        """Marca la meta la primera vez que se confirma el verde.
-
-        No cambia el estado ni el comando: el verde sigue sin afectar el
-        mapeo. La marca detiene el ultimo tramo de la ruta fija y congela las
-        metricas de llegada.
-        """
+        """Procesa on verde."""
         activo = bool(msg.data)
         if activo and not self._verde_anterior and not self._meta_detectada:
             self._meta_detectada = True
-            # Congela tiempo_s/long_ruta_cm aca (INICIO->META): si el
-            # carrito sigue dando la vuelta al laberinto despues de ver el
-            # verde (logica_dos_reglas no se detiene sola), esos dos campos
-            # no deben seguir creciendo con ese recorrido extra.
+
+
             self._metricas_meta = self._metricas_actuales()
             self._publish_event(
                 EV.META, 'meta (verde) registrada'
@@ -652,10 +510,7 @@ class MazeSolverNode(Node):
         self._verde_anterior = activo
 
     def _on_calcular_ruta(self, msg: Bool):
-        """Comando 1: FRENAR el mapeo + CALCULAR la ruta.
-
-        Carga el guion fijo, detiene el carrito y lo deja quieto en
-        ESPERA_RUTA con el amarillo pintado. Nunca parte solo."""
+        """Procesa on calcular ruta."""
         if not bool(msg.data):
             return
         if not self._ruta_activa:
@@ -674,18 +529,14 @@ class MazeSolverNode(Node):
         self._set_state('ESPERA_RUTA')
 
     def _on_iniciar_ruta(self, msg: Bool):
-        """Comando 2: PARTIR. Recien con este comando el carrito arranca y
-        maneja la ruta corta. Se puede REPETIR cuantas veces quieras: al
-        terminar la ruta el carrito vuelve a ESPERA_RUTA (detenido) y este
-        comando la maneja de nuevo desde el inicio (colocalo ahi). Nunca parte
-        solo. Requiere que la ruta ya este calculada (/maze/calcular_ruta)."""
+        """Procesa on iniciar ruta."""
         if not bool(msg.data):
             return
         if not self._ruta_activa:
             self._publish_event(EV.TIMEOUT, 'iniciar_ruta ignorado: ruta_activa=false')
             return
         if self._terminado or self._state == 'SEGUIR_RUTA':
-            return   # ya manejando (o terminado): no reiniciar a mitad
+            return
         if self._ruta_movimientos is None and not self._calcular_ruta():
             self._publish_event(
                 EV.TIMEOUT,
@@ -699,15 +550,13 @@ class MazeSolverNode(Node):
         self._publish_event(EV.INICIO, 'PARTIR: manejando la ruta corta')
         self._set_state('SEGUIR_RUTA')
 
-    # ------------------------------------------------------------------
-    # Ciclo de control principal
-    # ------------------------------------------------------------------
+
     def _on_timer(self):
+        """Procesa on timer."""
         if not (self._odom_ready and self._zones_ready):
             return
 
-        # FRENO_PARE es una capa de pausa: NO cambia self._state ni ejecuta
-        # decisiones. Solo manda velocidad cero y congela los relojes internos.
+
         if self._freno_pare_start is not None:
             elapsed = (self.get_clock().now() - self._freno_pare_start).nanoseconds / 1e9
             if elapsed < self._tiempo_pare:
@@ -717,10 +566,8 @@ class MazeSolverNode(Node):
 
             self._congelar_relojes_durante(elapsed)
             self._freno_pare_start = None
-            # Ignora nuevos flancos de rojo (incluye los que hayan quedado
-            # pendientes por parpadeo durante la espera) hasta que el robot
-            # avance distancia_ignorar_pare_m desde este punto -- recien
-            # cumplido el tiempo_pare_s de espera.
+
+
             self._pare_pendiente = False
             self._pare_ignorar_xy = (self._odom_x, self._odom_y)
             self._celdas_pare_respetadas.add(self._grid.cell)
@@ -742,7 +589,7 @@ class MazeSolverNode(Node):
             self._publish_twist(Twist())
             return
         elif self._pare_pendiente:
-            # En META/DETENIDO el carrito ya está parado.
+
             self._pare_pendiente = False
 
         if self._handle_obstaculo_frente():
@@ -750,11 +597,11 @@ class MazeSolverNode(Node):
 
         self._STATE_HANDLERS[self._state]()
 
-        # Monitor: si acumula mas de 360 grados girando, corrige al contrario.
+
         self._monitor_rotacion()
 
     def _congelar_relojes_durante(self, segundos: float):
-        """Impide que FRENO_PARE consuma tiempos de la maniobra pausada."""
+        """Ejecuta congelar relojes durante."""
         pausa = Duration(nanoseconds=int(segundos * 1e9))
         for nombre in (
                 '_buscar_pare_start', '_pare_hold_start', '_alinear_start',
@@ -765,30 +612,13 @@ class MazeSolverNode(Node):
                 setattr(self, nombre, instante + pausa)
 
     def _handle_obstaculo_frente(self) -> bool:
-        """Regla general de seguridad, activa en cualquier estado.
-
-        Si hay un objeto al frente mas cerca que ``umbral_colision_m``
-        sostenido ``frente_confirmaciones_ciclos`` ciclos seguidos (mismo
-        filtro anti-ruido que la regla 4 del mapeo; sin esto, un solo frame
-        del LiDAR viendo una pared cercana MIENTRAS GIRA -- normal y
-        esperable en un pasillo angosto, no un choque real -- disparaba
-        todo el retroceso de inmediato, interrumpiendo giros/tramos de la
-        ruta fija con un giro que no pedia el guion):
-        1. Retrocede ``retroceso_obstaculo_m`` (en arco) para despegarse.
-        2. Avanza ``avance_post_retroceso_m`` RECTO.
-        3. Recien ahi analiza el entorno: espera ``tiempo_espera_obstaculo_s``
-           comprobando si el frente ya esta libre; si sigue bloqueado,
-           reinicia la espera (queda preguntando en bucle hasta liberarse).
-        Retorna True si este ciclo ya publico un comando (el llamador debe
-        omitir el despacho normal de estados).
-        """
+        """Gestiona obstaculo frente."""
         if self._terminado:
             return False
 
         z = self._zones
-        # Anti-choque con LiDAR: bloquea si el cono ANCHO o el ANGOSTO ven algo
-        # mas cerca que umbral_colision. El cono angosto (front_narrow) atrapa
-        # paredes de frente que el ancho promedia y no detecta a tiempo.
+
+
         frente_bloqueado = (
             (z.front_valid and z.front < self._umbral_colision) or
             (z.front_narrow_valid and z.front_narrow < self._umbral_colision))
@@ -808,9 +638,8 @@ class MazeSolverNode(Node):
                 return True
             cmd = Twist()
             cmd.linear.x = -self._v_retroceso_obstaculo
-            # Retrocede en arco girando hacia la DERECHA (signo negativo,
-            # mismo convenio que 'DERECHA' en _handle_girar/
-            # _ejecutar_giro_ruta), no en linea recta.
+
+
             cmd.angular.z = -self._w_retroceso_obstaculo
             self._publish_twist(cmd)
             return True
@@ -841,8 +670,8 @@ class MazeSolverNode(Node):
                     self.get_clock().now() - self._espera_obstaculo_inicio
                 ).nanoseconds / 1e9
                 if elapsed >= self._tiempo_espera_obstaculo:
-                    # Se cumplio la espera y sigue bloqueado: volver a
-                    # preguntar en el proximo ciclo tras otra espera igual.
+
+
                     self._espera_obstaculo_inicio = self.get_clock().now()
                 return True
             self._esperando_obstaculo = False
@@ -865,9 +694,7 @@ class MazeSolverNode(Node):
         return False
 
     def _monitor_rotacion(self):
-        """Anti-vuelta-completa: acumula el giro y, si supera 360 grados sin
-        avanzar recto (el robot se puso a dar vueltas), corrige con un giro de
-        correccion_giro_grados al lado CONTRARIO y retoma el avance."""
+        """Ejecuta monitor rotacion."""
         if not self._correccion_giro_360 or self._terminado:
             return
         if self._state in ('ESPERA_RUTA', 'SEGUIR_RUTA', 'META', 'DETENIDO'):
@@ -877,7 +704,7 @@ class MazeSolverNode(Node):
         if self._yaw_prev_360 is None:
             self._yaw_prev_360 = self._yaw
             return
-        # Avance recto del mapeo: resetea el acumulador (no esta girando).
+
         if self._state == 'AVANZAR_PARALELO':
             self._yaw_prev_360 = self._yaw
             self._rot_acum = 0.0
@@ -896,9 +723,7 @@ class MazeSolverNode(Node):
             self._set_state('CORREGIR_GIRO')
 
     def _handle_corregir_giro(self):
-        """Giro corto (correccion_giro_grados) al lado contrario para
-        reorientar tras una vuelta de mas de 360 grados, luego retoma el
-        avance del mapeo."""
+        """Gestiona corregir giro."""
         girado = abs(angle_diff(self._yaw, self._yaw_correccion0))
         if girado >= self._correccion_giro_rad:
             self._publish_twist(Twist())
@@ -912,68 +737,52 @@ class MazeSolverNode(Node):
 
         return False
 
-    # ------------------------------------------------------------------
-    # Espejo derecha/izquierda de logica_dos_reglas (seguir_pared_izquierda)
-    # ------------------------------------------------------------------
-    # El ajuste de linea (angulo, distancia) de una pared PARALELA al
-    # pasillo tiene la MISMA relacion con el heading del robot sin
-    # importar de que lado se mide -- dos paredes paralelas se ven con
-    # la misma pendiente aparente desde un mismo error de heading, asi
-    # que el termino de ANGULO del Kp no cambia de signo entre lados.
-    # El termino de DISTANCIA si cambia: "muy cerca" siempre corrige
-    # alejandose de la pared que se sigue, y alejarse es IZQUIERDA
-    # cuando se sigue la derecha pero DERECHA cuando se sigue la
-    # izquierda -- de ahi el signo opuesto. (Derivado geometricamente,
-    # no adivinado -- ver commit que agrego este espejo.)
+
     def _line_valid(self, z) -> bool:
+        """Ejecuta line valid."""
         return bool(z.left_line_valid if self._seguir_izquierda else z.right_line_valid)
 
     def _line_angle(self, z) -> float:
+        """Ejecuta line angle."""
         return z.left_line_angle_rad if self._seguir_izquierda else z.right_line_angle_rad
 
     def _line_distance(self, z) -> float:
+        """Ejecuta line distance."""
         return z.left_line_distance_m if self._seguir_izquierda else z.right_line_distance_m
 
     def _lado_valid(self, z) -> bool:
+        """Ejecuta lado valid."""
         return bool(z.left_valid if self._seguir_izquierda else z.right_valid)
 
     def _lado_distancia(self, z) -> float:
+        """Ejecuta lado distancia."""
         return z.left if self._seguir_izquierda else z.right
 
     def _lado_frente_valid(self, z) -> bool:
-        """Cono diagonal-adelante del lado seguido (left_front/right_front):
-        detecta que el lado se abre ANTES que el cono lateral puro (regla 0,
-        deteccion temprana del hueco)."""
+        """Ejecuta lado frente valid."""
         return bool(z.left_front_valid if self._seguir_izquierda else z.right_front_valid)
 
     def _lado_frente_distancia(self, z) -> float:
+        """Ejecuta lado frente distancia."""
         return z.left_front if self._seguir_izquierda else z.right_front
 
     def _twist_wall_follow(self) -> Twist:
-        """Twist de avance recto con correccion lateral Kp hacia la pared
-        seguida (mismo ajuste de linea del mapeo). Reutilizado por
-        AVANZAR_PARALELO y por los tramos de la ruta fija marcados
-        wall_follow=True (para 'mantenerse recto' en vez de ir a ciegas
-        por odometria)."""
+        """Ejecuta twist wall follow."""
         z = self._zones
         cmd = Twist()
         if not self._line_valid(z):
-            # Perdida no confirmada todavia (podria ser un solo vistazo
-            # de ruido): avanzar recto, sin corregir nada.
+
+
             cmd.linear.x = self._velocidad_recta
             return cmd
-        # Termino de ANGULO: mismo signo sin importar el lado (dos
-        # paredes paralelas se ven con la misma pendiente aparente desde
-        # un mismo error de heading). Termino de DISTANCIA: signo opuesto
-        # segun el lado (alejarse de la pared seguida es IZQUIERDA si se
-        # sigue la derecha, DERECHA si se sigue la izquierda).
+
+
         signo_distancia = -1.0 if self._seguir_izquierda else 1.0
         error_distancia = self._distancia_objetivo_recta - self._line_distance(z)
         correccion = (self._ganancia_angulo_recta * self._line_angle(z)
                       + signo_distancia * self._ganancia_distancia_recta * error_distancia)
-        # Anti-choque lateral (LiDAR): si la pared seguida esta MUY cerca
-        # (< umbral_lateral_min), fuerza el giro maximo alejandose para no
-        # rozarla, sin confiar solo en el termino Kp.
+
+
         if self._lado_valid(z) and self._lado_distancia(z) < self._umbral_lateral_min:
             correccion = signo_distancia * self._angular_max_recta
         cmd.linear.x = self._velocidad_recta
@@ -981,17 +790,16 @@ class MazeSolverNode(Node):
         return cmd
 
     def _direccion_obstaculo(self) -> str:
-        """Obstaculo al frente: gira ALEJANDOSE de la pared que se sigue."""
+        """Ejecuta direccion obstaculo."""
         return 'DERECHA' if self._seguir_izquierda else 'IZQUIERDA'
 
     def _direccion_vacio(self) -> str:
-        """Lado seguido vacio: gira ENTRANDO al hueco de ese mismo lado."""
+        """Ejecuta direccion vacio."""
         return 'IZQUIERDA' if self._seguir_izquierda else 'DERECHA'
 
-    # ------------------------------------------------------------------
-    # Estados
-    # ------------------------------------------------------------------
+
     def _handle_iniciar(self):
+        """Gestiona iniciar."""
         self._publish_event(
             EV.INICIO, f'inicio en {self._grid.cell}, heading {self._grid.heading}'
         )
@@ -1000,10 +808,12 @@ class MazeSolverNode(Node):
         self._set_state('AVANZAR_PARALELO')
 
     def _begin_avanzar_paralelo(self):
+        """Ejecuta begin avanzar paralelo."""
         self._cell_start_xy = (self._odom_x, self._odom_y)
         self._avance_chequeo_start_xy = (self._odom_x, self._odom_y)
 
     def _handle_avanzar_paralelo(self):
+        """Gestiona avanzar paralelo."""
         if self._logica_dos_reglas:
             self._handle_avanzar_paralelo_dos_reglas()
             return
@@ -1032,8 +842,8 @@ class MazeSolverNode(Node):
                 return
 
             if self._modo_simplificado:
-                # Decidir con una sola lectura, sin confirmar con varias
-                # muestras ni pasar por BUSCAR_PARE.
+
+
                 self._derecha_libre = bool(z.right_valid and z.right > self._umbral_lado_libre)
                 self._frente_libre = bool(z.front_valid and z.front > self._umbral_frente_libre)
                 self._izquierda_libre = bool(z.left_valid and z.left > self._umbral_lado_libre)
@@ -1045,69 +855,7 @@ class MazeSolverNode(Node):
         self._publish_twist(self._twist_wall_follow())
 
     def _handle_avanzar_paralelo_dos_reglas(self):
-        """CUATRO REGLAS (ver logica_dos_reglas arriba), con AJUSTE DE
-        LINEA para el lado SEGUIDO (seguir_pared_izquierda decide si es
-        izquierda o derecha -- ver _line_*/_lado_*/_direccion_* arriba)
-        y confirmacion de varios ciclos para el frente:
-
-        1. Avanzar recto mientras el frente este libre.
-        2. Si hay ajuste de linea valido del lado seguido, corregir
-           con Kp (angulo + distancia hacia distancia_objetivo_m) --
-           distingue una pared vista en diagonal (se corrige el
-           angulo) de un obstaculo nuevo (no encaja como continuacion
-           de esa recta).
-        3. Chequeo PERIODICO del lado seguido (no deteccion continua
-           por LiDAR -- en la practica no distinguia bien "pared" de
-           "hueco", ver commit anterior), evaluado ANTES que el frente
-           (regla 4): cada distancia_chequeo_pared_m de avance en
-           linea recta (medido por odometria desde
-           _avance_chequeo_start_xy), se detiene por completo y pasa a
-           PAUSA_CHEQUEO_PARED, que verifica con distancia PUNTUAL si
-           el lado seguido esta ocupado o vacio -- si esta vacio, gira
-           90 grados DINAMICO ENTRANDO al hueco (_direccion_vacio) mas
-           avance_giro_vacio_m recto, y RECIEN AHI verifica de nuevo:
-           si sigue vacio repite el par giro+avance (hasta
-           giro_vacio_max_repeticiones), si ya encuentra pared retoma
-           AVANZAR_PARALELO (ver AVANCE_GIRO_VACIO); si esta ocupado
-           desde el principio, retoma el avance reiniciando el
-           contador de distancia desde ahi (evita reintentar en el
-           mismo lugar).
-        4. Si hay obstaculo al frente (front_narrow, cono angosto)
-           sostenido durante frente_confirmaciones_ciclos seguidos, se
-           detiene EN SECO y pasa por el mismo PAUSA_CHEQUEO_PARED de
-           la regla 3 (detenido tiempo_chequeo_pared_s, 1s, y RECIEN
-           despues verifica con distancia PUNTUAL si el lado seguido
-           esta ocupado o vacio) antes de girar -- si esta VACIO, gira
-           90 grados DINAMICO ENTRANDO al hueco; si esta OCUPADO, gira
-           ALEJANDOSE de la pared seguida (_direccion_obstaculo, con
-           self._chequeo_por_frente=True, PAUSA_CHEQUEO_PARED sabe que
-           aqui no puede "retomar avance" como en la regla 3, porque
-           el frente sigue bloqueado). Sin este chequeo, un giro ciego
-           en un rincon angosto puede volver a encerrar al robot en el
-           mismo bolsillo del que viene (loop cerrado observado en
-           sim_local/, ver commit anterior). Se evalua DESPUES de la
-           regla 3: en el ciclo exacto en que ambas coincidirian, se
-           prioriza el chequeo periodico (el resultado es el mismo
-           freno en seco).
-
-        No cuenta celdas ni pasa por ALINEAR (el giro dinamico ya lo
-        reemplaza) -- portado tal cual de
-        sim_local/run_sim_laberinto.py::_correr_logica_simple.
-
-        El color verde es solo un marcador de visualización. No forma parte
-        de estas reglas y nunca modifica el estado ni el comando de velocidad.
-
-        Regla 0 (deteccion TEMPRANA del vacio, EN MOVIMIENTO): no espera a
-        completar distancia_chequeo_pared_m -- usa el cono DIAGONAL-ADELANTE
-        del lado seguido (left_front/right_front, no el lateral puro): ese
-        rayo deja de ver la pared ANTES de que el costado del robot llegue
-        al hueco, dando mas distancia real de reaccion (no solo menos
-        ciclos de espera). Si aparece libre sostenido
-        chequeo_pared_confirmaciones_ciclos ciclos seguidos mientras avanza,
-        gira de inmediato. Se prioriza sobre las reglas 1-4: encontrar el
-        hueco antes evita pasarlo de largo esperando el proximo chequeo
-        periodico.
-        """
+        """Gestiona avanzar paralelo dos reglas."""
         z = self._zones
 
         lado_libre_temprano = bool(
@@ -1165,30 +913,7 @@ class MazeSolverNode(Node):
         self._publish_twist(self._twist_wall_follow())
 
     def _handle_pausa_chequeo_pared(self):
-        """Detenido tiempo_chequeo_pared_s (0.5s) -- ya sea por el
-        chequeo PERIODICO (regla 3) o porque se confirmo un obstaculo
-        al frente (regla 4, self._chequeo_por_frente=True) -- y RECIEN
-        despues verifica con distancia PUNTUAL (no el ajuste de linea)
-        si el lado SEGUIDO esta ocupado (pared) o vacio:
-
-        - Si esta VACIO: gira ENTRANDO al hueco (_direccion_vacio, en
-          ambos casos).
-        - Si esta OCUPADO:
-          - Si vino del chequeo periodico (regla 3): retoma el avance
-            normal, reiniciando el contador de distancia desde aqui
-            (evita volver a dispararse de inmediato en el mismo
-            lugar).
-          - Si vino de un obstaculo al frente (regla 4): NO puede
-            simplemente retomar el avance (el frente sigue bloqueado)
-            -- gira ALEJANDOSE de la pared seguida (_direccion_
-            obstaculo).
-
-        "Vacio" se confirma con chequeo_pared_confirmaciones_ciclos
-        lecturas SEGUIDAS (no una sola) -- un giro es una decision
-        cara de revertir, asi que se exige sostener el "vacio" varios
-        ciclos (sigue detenido mientras confirma) antes de
-        comprometerse. "Ocupado" no necesita esta confirmacion (el
-        peor caso es solo seguir derecho un poco mas)."""
+        """Gestiona pausa chequeo pared."""
         self._publish_twist(Twist())
         elapsed = (self.get_clock().now() - self._pausa_chequeo_start).nanoseconds / 1e9
         if elapsed < self._tiempo_chequeo_pared:
@@ -1226,13 +951,13 @@ class MazeSolverNode(Node):
             self._set_state('GIRAR')
             return
 
-        # Ocupado (chequeo periodico): sigue habiendo pared -- retoma
-        # el avance normal, reiniciando el contador de distancia.
+
         self._publish_event(EV.GIRO, 'lado seguido ocupado -> retoma avance')
         self._avance_chequeo_start_xy = (self._odom_x, self._odom_y)
         self._set_state('AVANZAR_PARALELO')
 
     def _handle_detectar_cruce(self):
+        """Gestiona detectar cruce."""
         self._publish_twist(Twist())
 
         if self._cruce_muestras is None:
@@ -1253,6 +978,7 @@ class MazeSolverNode(Node):
             return
 
         def consenso(muestras):
+            """Ejecuta consenso."""
             return sum(muestras) >= self._consenso_minimo
 
         self._derecha_libre = consenso(self._cruce_muestras['right'])
@@ -1271,6 +997,7 @@ class MazeSolverNode(Node):
         self._set_state('BUSCAR_PARE')
 
     def _handle_buscar_pare(self):
+        """Gestiona buscar pare."""
         self._publish_twist(Twist())
 
         if not self._usar_camara:
@@ -1279,9 +1006,7 @@ class MazeSolverNode(Node):
 
         cell = self._grid.cell
 
-        # Si ya se inicio el conteo de los 3 s, completarlo sin importar
-        # parpadeos momentaneos de la deteccion (evita abortar el PARE
-        # a mitad de camino si la camara pierde el color rojo un frame).
+
         if self._pare_hold_start is not None:
             elapsed = (self.get_clock().now() - self._pare_hold_start).nanoseconds / 1e9
             if elapsed >= self._tiempo_pare:
@@ -1300,6 +1025,7 @@ class MazeSolverNode(Node):
             self._set_state('DECIDIR')
 
     def _handle_decidir(self):
+        """Gestiona decidir."""
         if self._derecha_libre:
             direction = 'DERECHA'
         elif self._frente_libre:
@@ -1328,15 +1054,14 @@ class MazeSolverNode(Node):
         self._set_state('PAUSA_GIRO')
 
     def _handle_pausa_giro(self):
-        """Robot detenido ``tiempo_pausa_antes_girar_s`` antes de arrancar
-        el arco de GIRAR -- separa visiblemente "termine de avanzar" de
-        "empiezo a girar" en vez de una transicion instantanea."""
+        """Gestiona pausa giro."""
         self._publish_twist(Twist())
         elapsed = (self.get_clock().now() - self._pausa_giro_start).nanoseconds / 1e9
         if elapsed >= self._tiempo_pausa_antes_girar:
             self._set_state('GIRAR')
 
     def _compute_turn_target(self, yaw: float, direction: str) -> float:
+        """Calcula compute turn target."""
         if direction == 'DERECHA':
             delta = -self._angulo_giro_rad
         elif direction == 'IZQUIERDA':
@@ -1348,6 +1073,7 @@ class MazeSolverNode(Node):
         return normalize_angle(yaw + delta)
 
     def _handle_girar(self):
+        """Gestiona girar."""
         if self._logica_dos_reglas:
             self._handle_girar_dinamico()
             return
@@ -1357,49 +1083,20 @@ class MazeSolverNode(Node):
         if abs(error) <= self._tolerancia_giro_rad:
             self._publish_twist(Twist())
             self._grid.apply_turn(self._decision_actual)
-            # ALINEAR corre siempre, incluso en modo_simplificado: GIRAR
-            # por si solo solo cierra el lazo contra el yaw de odometria
-            # (un angulo objetivo fijo, con la deriva propia del
-            # odometro pese al factor de correccion). ALINEAR corrige
-            # ese resultado con el LiDAR real (right_front/right_rear)
-            # despues del giro -- es el feedback real, no un angulo fijo.
+
+
             self._alinear_start = None
             self._set_state('ALINEAR')
             return
 
-        # Chasis Ackermann: no puede rotar en el sitio. Se aproxima el
-        # giro con avance lento + direccion maxima, cerrando el lazo
-        # con el yaw de la odometria (no con tiempo fijo).
+
         cmd = Twist()
         cmd.linear.x = self._v_giro_lineal
         cmd.angular.z = self._v_giro_angular if error > 0.0 else -self._v_giro_angular
         self._publish_twist(cmd)
 
     def _handle_girar_dinamico(self):
-        """Giro FIJO por odometria (logica_dos_reglas). Antes giraba
-        DINAMICO: paraba en cuanto el LiDAR mostraba pared paralela
-        (right/left_line_angle_rad ~0). En pista real eso resultaba en
-        giros inconsistentes -- a veces bastante menos de 90 grados, a
-        veces bastante mas -- porque "parece paralelo" segun el LiDAR
-        puede dispararse antes o despues de los 90 grados reales,
-        segun ruido o la geometria puntual del rincon.
-
-        Ahora cierra el lazo SOLO contra el yaw de odometria
-        (self._yaw, ya con factor_ang_odom aplicado -- calibrado en
-        pista) hasta angulo_giro_deg (90 grados), igual que el giro
-        fijo original -- exacto y repetible, sin depender de que el
-        LiDAR encuentre algo parecido a "paralelo" en el momento
-        justo. angulo_maximo_giro_deg se mantiene como tope de
-        seguridad adicional (por si el odometro se traba y nunca
-        llega al objetivo).
-
-        Si self._giro_vacio_fase == 1 (este giro es parte de una
-        secuencia de "lado seguido vacio"), no vuelve directo a
-        AVANZAR_PARALELO al terminar -- pasa por AVANCE_GIRO_VACIO
-        (avance_giro_vacio_m recto), que verifica de nuevo el lado
-        seguido: si sigue vacio, repite otro giro de 90 (hasta
-        giro_vacio_max_repeticiones, tope de seguridad); si ya
-        encuentra pared, recien ahi retoma AVANZAR_PARALELO."""
+        """Gestiona girar dinamico."""
         angulo_girado = abs(angle_diff(self._yaw, self._yaw_inicio_giro))
 
         if angulo_girado >= self._angulo_giro_rad or angulo_girado >= self._angulo_maximo_giro_rad:
@@ -1408,11 +1105,8 @@ class MazeSolverNode(Node):
             self.get_logger().info(
                 f'GIRO TERMINADO (90 fijo): girado={math.degrees(angulo_girado):.0f} deg'
             )
-            # Deteccion de patinaje: compara lo girado por odometria de
-            # rueda contra lo girado por el giroscopio (IMU, no depende de
-            # las ruedas) durante este mismo giro. Una diferencia grande
-            # indica que una rueda patino (giro real distinto del medido
-            # por las ruedas).
+
+
             odom_deg = math.degrees(angulo_girado)
             imu_deg = abs(math.degrees(self._imu_acum_giro))
             diff_deg = abs(odom_deg - imu_deg)
@@ -1436,14 +1130,7 @@ class MazeSolverNode(Node):
         self._publish_twist(cmd)
 
     def _handle_avance_giro_vacio(self):
-        """Tras un giro de 90 de la secuencia de "lado seguido vacio",
-        avanza avance_giro_vacio_m (10cm) en linea recta y RECIEN
-        despues verifica de nuevo con distancia PUNTUAL si el lado
-        seguido sigue vacio -- si sigue vacio, repite: otro giro de 90
-        en la MISMA direccion (self._decision_actual no cambia) mas
-        otro avance de 10cm, hasta giro_vacio_max_repeticiones (tope
-        de seguridad, evita girar para siempre en un espacio muy
-        abierto). Si ya encuentra pared, retoma AVANZAR_PARALELO."""
+        """Gestiona avance giro vacio."""
         dx = self._odom_x - self._avance_fijo_inicio_xy[0]
         dy = self._odom_y - self._avance_fijo_inicio_xy[1]
         avance = math.hypot(dx, dy)
@@ -1477,14 +1164,14 @@ class MazeSolverNode(Node):
         self._set_state('AVANZAR_PARALELO')
 
     def _handle_alinear(self):
+        """Gestiona alinear."""
         if self._alinear_start is None:
             self._alinear_start = self.get_clock().now()
 
         z = self._zones
         if not (z.right_front_valid and z.right_rear_valid):
-            # Sin pared derecha de referencia (p.ej. abertura tras el
-            # giro): el yaw de GIRAR ya dejo al robot orientado al
-            # cardinal correcto, se continua sin correccion adicional.
+
+
             self._alinear_start = None
             self._set_state('VERIFICAR_META')
             return
@@ -1504,6 +1191,7 @@ class MazeSolverNode(Node):
         self._publish_twist(cmd)
 
     def _handle_verificar_meta(self):
+        """Gestiona verificar meta."""
         if self._grid.cell == self._celda_meta:
             self._publish_twist(Twist())
             self._publish_event(EV.META, f'meta alcanzada en {self._grid.cell}')
@@ -1514,17 +1202,9 @@ class MazeSolverNode(Node):
         self._begin_avanzar_paralelo()
         self._set_state('AVANZAR_PARALELO')
 
-    # ------------------------------------------------------------------
-    # FASE 2: ruta rapida FIJA + freno + manejo por guion de movimientos
-    # ------------------------------------------------------------------
+
     def _calcular_ruta(self) -> bool:
-        """Carga la ruta rapida FIJA: un guion de tramos fijo y conocido de
-        la pista (ruta_fija_giros/ruta_fija_distancias_m). El primer y el ultimo
-        tramo usan wall-follow (mantenerse recto); el ultimo ademas corta
-        apenas detecta verde, aunque no haya llegado a su distancia (tope
-        de seguridad). NO mueve el carrito ni cambia de estado. Devuelve
-        True (la ruta fija siempre esta disponible, no depende de haber
-        visto el verde antes)."""
+        """Calcula calcular ruta."""
         n = len(self._ruta_fija_giros)
         self._ruta_movimientos = [
             {
@@ -1544,11 +1224,7 @@ class MazeSolverNode(Node):
         return True
 
     def _publicar_ruta(self):
-        """Publica el camino de celdas APROXIMADO del guion fijo (para
-        pintarlo de amarillo en web/index.html vía /maze/ruta_corta) --
-        cada distancia_m se redondea a celdas de tamano_celda_m. Es solo
-        para visualizacion: el manejo real usa las distancias/giros en
-        metros, no esta grilla."""
+        """Publica publicar ruta."""
         sim = RouteExplorer.from_cell_name(
             self._ruta_celda_inicio, self._ruta_heading_inicial)
         celdas = [sim.cell]
@@ -1565,8 +1241,7 @@ class MazeSolverNode(Node):
         self._ruta_pub.publish(String(data=self._ruta_json))
 
     def _republicar_ruta(self):
-        """Re-emite la ruta cada ~1 s para visualizadores que se conecten
-        tarde (el publisher es volatil)."""
+        """Publica republicar ruta."""
         if self._ruta_json is None:
             return
         self._ruta_pub_counter += 1
@@ -1575,23 +1250,12 @@ class MazeSolverNode(Node):
             self._ruta_pub.publish(String(data=self._ruta_json))
 
     def _handle_espera_ruta(self):
-        """Detenido con la ruta ya calculada (amarillo pintado). Espera el
-        comando /maze/iniciar_ruta para PARTIR. No se mueve ni retoma el mapeo
-        por su cuenta: el carrito nunca arranca solo."""
+        """Gestiona espera ruta."""
         self._publish_twist(Twist())
         self._republicar_ruta()
 
     def _handle_seguir_ruta(self):
-        """Maneja la ruta corta obedeciendo SOLO el guion de movimientos.
-
-        Gira lo que dice la ruta (giro fijo de 90/180 cerrado por yaw) y
-        avanza en recto la distancia indicada (cerrado por odometria; el
-        ultimo tramo corta antes si detecta verde). El primer y el ultimo
-        tramo ademas usan wall-follow (ajuste de linea, mantenerse recto);
-        los del medio van a ciegas por odometria. La anticolision es la
-        unica capa reactiva global y ya corre en _on_timer antes de este
-        handler.
-        """
+        """Gestiona seguir ruta."""
         self._republicar_ruta()
         if (self._ruta_movimientos is None
                 or self._ruta_idx >= len(self._ruta_movimientos)):
@@ -1601,7 +1265,7 @@ class MazeSolverNode(Node):
                 'ruta corta completada; DETENIDO. Reenvia /maze/iniciar_ruta '
                 'para repetir (colocalo en el inicio mirando NORTE).'
             )
-            self._set_state('ESPERA_RUTA')   # vuelve a esperar -> se puede repetir
+            self._set_state('ESPERA_RUTA')
             return
 
         mov = self._ruta_movimientos[self._ruta_idx]
@@ -1613,15 +1277,12 @@ class MazeSolverNode(Node):
                 mov.get('hasta_verde', False))
 
     def _iniciar_avance_ruta(self):
+        """Ejecuta iniciar avance ruta."""
         self._ruta_fase = 'AVANCE'
         self._ruta_avance_xy0 = (self._odom_x, self._odom_y)
 
     def _ejecutar_giro_ruta(self, direccion: str):
-        """Giro fijo por yaw. Un giro de 180 (ATRAS) se hace como DOS sub-giros
-        de 90 hacia la izquierda: cerrar directo a 180 con abs(angle_diff) es
-        fragil (solo se cumple exacto en pi; el muestreo discreto se pasa y
-        angle_diff decrece -> giro infinito). Cada sub-giro reusa el cierre a
-        90 (angulo_giro_rad), que si es monotono y confiable."""
+        """Ejecuta ejecutar giro ruta."""
         if direccion == 'NINGUNO':
             self._iniciar_avance_ruta()
             return
@@ -1633,7 +1294,7 @@ class MazeSolverNode(Node):
             self._publish_twist(Twist())
             self._ruta_giro_restante -= 1
             if self._ruta_giro_restante > 0:
-                self._ruta_giro_yaw0 = self._yaw   # arrancar el siguiente 90
+                self._ruta_giro_yaw0 = self._yaw
                 return
             self._ruta_giro_restante = None
             self._iniciar_avance_ruta()
@@ -1645,11 +1306,7 @@ class MazeSolverNode(Node):
         self._publish_twist(cmd)
 
     def _ejecutar_avance_ruta(self, distancia_m, wall_follow=False, hasta_verde=False):
-        """Avanza recto ``distancia_m`` (por odometria). Si ``hasta_verde``,
-        corta apenas se detecta verde aunque no se haya llegado a
-        ``distancia_m`` (que en ese caso es solo un tope de seguridad). Si
-        ``wall_follow``, usa correccion lateral Kp (mantenerse recto) en vez
-        de ir a ciegas por odometria."""
+        """Ejecuta ejecutar avance ruta."""
         if hasta_verde and self._verde_anterior:
             self._publish_twist(Twist())
             self._ruta_idx += 1
@@ -1674,19 +1331,16 @@ class MazeSolverNode(Node):
         self._publish_twist(cmd)
 
     def _handle_meta(self):
+        """Gestiona meta."""
         self._publish_twist(Twist())
 
     def _handle_detenido(self):
+        """Gestiona detenido."""
         self._publish_twist(Twist())
 
-    # ------------------------------------------------------------------
-    # Utilidades de publicacion
-    # ------------------------------------------------------------------
+
     def _metricas_actuales(self) -> dict:
-        """Campos Gran Prix que espera metrics_logger.py (dead_ends_visitados
-        no se calcula aca -- sin una nocion clara de "callejon sin salida"
-        en logica_dos_reglas, se deja el default 0 de metrics_logger antes
-        que inventar un numero)."""
+        """Ejecuta metricas actuales."""
         if self._tiempo_inicio is not None:
             tiempo_s = (self.get_clock().now() - self._tiempo_inicio).nanoseconds / 1e9
         else:
@@ -1701,6 +1355,7 @@ class MazeSolverNode(Node):
         }
 
     def _publish_twist(self, cmd: Twist):
+        """Publica publish twist."""
         self._cmd_pub.publish(cmd)
         z = self._zones
         if z is not None:
@@ -1718,32 +1373,24 @@ class MazeSolverNode(Node):
                 'd_der': float(z.right) if z.right_valid else None,
                 'd_lado_frontal': float(followed) if followed_valid else None,
                 'd_lado_trasera': float(rear) if rear_valid else None,
-                # Un giro fisico de 90 real (los 3 puntos donde se decide
-                # direccion y se entra a GIRAR) -- a diferencia de tramo
-                # (que cuenta visualizador_web via /maze/estado), esto NO
-                # se pierde cuando un "giro vacio" encadena varias vueltas
-                # de 90 sin volver a pasar por AVANZAR_PARALELO entre medio
-                # (ver AVANCE_GIRO_VACIO). visualizador_web/index.html usan
-                # este contador para saber en que vertice de la ruta fija
-                # dibujada esta el carrito, sin recalcular nada.
+
+
                 'giros_fisicos': self._contador_giros_fisicos,
             }
-            # Congelado en META (ver _on_verde) o en vivo mientras mapea --
-            # metrics_logger.py lee estos mismos campos de este topico.
+
+
             payload.update(self._metricas_meta or self._metricas_actuales())
             self._metrics_pub.publish(String(data=json.dumps(payload)))
 
     def _publish_event(self, tipo: str, detalle: str):
+        """Publica publish event."""
         self._event_pub.publish(String(data=json.dumps({'tipo': tipo, 'detalle': detalle})))
         self.get_logger().info(f'[{tipo}] {detalle}')
 
     def _set_state(self, new_state: str):
-        # Sin log de consola aqui a proposito -- cada transicion
-        # relevante ya imprime una sola linea con el detalle via
-        # _publish_event (o get_logger().info directo en GIRO
-        # TERMINADO), asi que loguear tambien la transicion de estado
-        # en si duplicaba la info. El topico /robot_state (para otros
-        # nodos/herramientas) se sigue publicando igual.
+
+
+        """Ejecuta set state."""
         if new_state == 'GIRAR' and self._state != 'GIRAR':
             self._imu_acum_giro = 0.0
             self._imu_t_prev = self.get_clock().now()
@@ -1752,6 +1399,7 @@ class MazeSolverNode(Node):
 
 
 def main(args=None):
+    """Inicia el nodo."""
     rclpy.init(args=args)
     node = MazeSolverNode()
     try:
